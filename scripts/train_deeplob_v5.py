@@ -276,7 +276,8 @@ def train_epoch(
     optimizer: optim.Optimizer,
     device: torch.device,
     config: dict,
-    scaler: Optional[GradScaler] = None
+    scaler: Optional[GradScaler] = None,
+    class_weights: Optional[torch.Tensor] = None
 ) -> Dict[str, float]:
     """训练一个 epoch
 
@@ -294,6 +295,9 @@ def train_epoch(
     use_amp = config['optim']['amp']
     grad_clip = config['optim']['grad_clip']
     use_bf16 = config['optim'].get('use_bf16', False)  # 读取 BF16 配置
+
+    # 獲取 label_smoothing 參數
+    label_smoothing = float(config['loss']['label_smoothing']['global'])
 
     pbar = tqdm(dataloader, desc='Training', leave=False)
 
@@ -333,10 +337,14 @@ def train_epoch(
                 # 裁剪 logits 防止极端值
                 logits = torch.clamp(logits, min=-100.0, max=100.0)
 
+                # 計算帶 label_smoothing 和 class_weights 的 loss
                 loss_per_sample = nn.functional.cross_entropy(
-                    logits, labels, reduction='none'
+                    logits, labels,
+                    reduction='none',
+                    label_smoothing=label_smoothing,
+                    weight=class_weights
                 )
-                # 加权 loss
+                # 加权 loss（樣本權重）
                 loss = (loss_per_sample * weights).sum() / (weights.sum() + 1e-8)
         else:
             logits = model(lob)
@@ -349,9 +357,14 @@ def train_epoch(
             # 裁剪 logits 防止极端值
             logits = torch.clamp(logits, min=-100.0, max=100.0)
 
+            # 計算帶 label_smoothing 和 class_weights 的 loss
             loss_per_sample = nn.functional.cross_entropy(
-                logits, labels, reduction='none'
+                logits, labels,
+                reduction='none',
+                label_smoothing=label_smoothing,
+                weight=class_weights
             )
+            # 加权 loss（樣本權重）
             loss = (loss_per_sample * weights).sum() / (weights.sum() + 1e-8)
 
         # 检查 loss
@@ -453,7 +466,8 @@ def evaluate(
     dataloader: DataLoader,
     device: torch.device,
     config: dict,
-    return_predictions: bool = False
+    return_predictions: bool = False,
+    class_weights: Optional[torch.Tensor] = None
 ) -> Dict:
     """评估模型（支持加权/不加权指标）
 
@@ -477,6 +491,9 @@ def evaluate(
     total_loss = 0
     total_weight = 0
 
+    # 獲取 label_smoothing 參數
+    label_smoothing = float(config['loss']['label_smoothing']['global'])
+
     criterion = nn.CrossEntropyLoss(reduction='none')
 
     with torch.no_grad():
@@ -486,7 +503,13 @@ def evaluate(
             weights = batch['weight'].to(device)
 
             logits = model(lob)
-            loss_per_sample = criterion(logits, labels)
+            # 計算帶 label_smoothing 和 class_weights 的 loss
+            loss_per_sample = nn.functional.cross_entropy(
+                logits, labels,
+                reduction='none',
+                label_smoothing=label_smoothing,
+                weight=class_weights
+            )
 
             # 加权 loss
             total_loss += (loss_per_sample * weights).sum().item()
@@ -755,6 +778,20 @@ def main():
         config['data']['test'], config, split='test', norm_meta=norm_meta
     )
 
+    # ===== 驗證資料維度與模型配置一致性 =====
+    expected_shape = tuple(config['model']['input']['shape'])
+    actual_shape = tuple(train_dataset.X.shape[1:])  # (timesteps, features)
+
+    if actual_shape != expected_shape:
+        raise ValueError(
+            f"❌ 數據維度與配置不匹配！\n"
+            f"   配置期望: {expected_shape}\n"
+            f"   實際數據: {actual_shape}\n"
+            f"   請檢查 configs/train_v5.yaml 中的 model.input.shape"
+        )
+
+    logger.info(f"✅ 數據維度驗證通過: {actual_shape}")
+
     # DataLoader 配置
     dataloader_kwargs = {
         'batch_size': config['dataloader']['batch_size'],
@@ -936,7 +973,7 @@ def main():
 
         # ===== 训练 =====
         train_metrics = train_epoch(
-            model, train_loader, None, optimizer, device, config, scaler
+            model, train_loader, None, optimizer, device, config, scaler, class_weights
         )
 
         logger.info(f"Train - Loss: {train_metrics['loss']:.4f}, "
@@ -944,7 +981,7 @@ def main():
                    f"Grad: {train_metrics['grad_norm']:.2f}")
 
         # ===== 验证 =====
-        val_results = evaluate(model, val_loader, device, config)
+        val_results = evaluate(model, val_loader, device, config, class_weights=class_weights)
 
         logger.info(f"Val   - Weighted Loss: {val_results['weighted']['loss']:.4f}, "
                    f"Weighted F1: {val_results['weighted']['f1_macro']:.4f}")
@@ -978,7 +1015,21 @@ def main():
         writer.add_scalar('Grad/norm', train_metrics['grad_norm'], epoch)
 
         # ===== 保存最佳模型 =====
-        current_score = val_results['weighted']['f1_macro']
+        # 動態讀取早停指標
+        def pick_metric(val_results: dict, metric_name: str) -> float:
+            """從驗證結果中提取指標值"""
+            if metric_name == "val.f1_macro_weighted":
+                return val_results['weighted']['f1_macro']
+            elif metric_name == "val.loss_weighted":
+                return val_results['weighted']['loss']
+            elif metric_name == "val.acc_unweighted":
+                return val_results['unweighted']['acc']
+            elif metric_name == "val.f1_macro_unweighted":
+                return val_results['unweighted']['f1_macro']
+            else:
+                raise ValueError(f"未知的早停指標: {metric_name}")
+
+        current_score = pick_metric(val_results, early_stop_metric)
 
         if ((early_stop_mode == 'max' and current_score > best_score) or
             (early_stop_mode == 'min' and current_score < best_score)):
@@ -1023,7 +1074,7 @@ def main():
     logger.info("=" * 70)
 
     test_results = evaluate(
-        model, test_loader, device, config, return_predictions=True
+        model, test_loader, device, config, return_predictions=True, class_weights=class_weights
     )
 
     logger.info(f"Test - Weighted Loss: {test_results['weighted']['loss']:.4f}, "
@@ -1055,7 +1106,7 @@ def main():
 
         # 使用验证集学习温度
         val_preds = evaluate(
-            model, val_loader, device, config, return_predictions=True
+            model, val_loader, device, config, return_predictions=True, class_weights=class_weights
         )['predictions']
 
         # 使用配置中的参数
