@@ -1,0 +1,243 @@
+# DeepLOB V5：Triple-Barrier 標籤版本
+# 適用於 extract_tw_stock_data_v5.py 產生的資料
+# 更新日期：2025-10-17
+#
+# 🎯 V5 核心特性（必讀）：
+# - 標籤方法: Triple-Barrier（止盈/止損/到期）
+# - 標籤含義: {0:上漲, 1:持平, 2:下跌}（與 v4 相同）
+# - 新增 mask 字段：標記觀察期不足的樣本（mask=False 需跳過）
+# - 預期效益: 更穩定的 F1 / MCC，高置信區預測更準確
+#
+# 📊 V5 vs V4 差異：
+# - v4: 固定 k 步 Δ% 超過/未超過閾值 → ↑/→/↓
+# - V5: 在最長 k_max 內是否先到達上/下目標 → ↑/→/↓
+# - V5 標籤更符合交易決策語義（對路徑順序敏感）
+# - V5 類別分布可能更均衡（持平比例可能降低）
+#
+# 資料生成指令（首次使用百分比法）：
+#   python scripts/extract_tw_stock_data_v5.py \
+#       --input-dir ./data/temp \
+#       --output-dir ./data/processed_v5 \
+#       --barrier-type pct \
+#       --alpha-tb 0.002 \
+#       --k-max 10
+
+# 資料配置
+data:
+  data_dir: "./data/processed_v5/npz"  # ✅ V5 數據路徑（Triple-Barrier）
+  format: "npz"  # 資料格式: "npz"
+
+  # NPZ 格式檔案名稱
+  train_file: "stock_embedding_train.npz"
+  val_file: "stock_embedding_val.npz"
+  test_file: "stock_embedding_test.npz"
+
+  output_dir: "./checkpoints/v5"
+
+  # V5 特殊設定
+  use_mask: true  # ✅ 啟用 mask 過濾（跳過觀察期不足的樣本）
+
+# 模型配置（與 v4 保持一致）
+model:
+  input_shape: [100, 20]  # 100 時間點 × 20 特徵
+  num_classes: 3  # 標籤: {0:上漲, 1:持平, 2:下跌}
+
+  # DeepLOB 架構參數（沿用 v4 成功配置）
+  conv1_filters: 32
+  conv2_filters: 32
+  conv3_filters: 32
+  lstm_hidden_size: 64
+  fc_hidden_size: 64
+  dropout: 0.52  # 沿用 v4 Run 3 配置
+
+# 訓練配置（沿用 v4 成功配置）
+training:
+  epochs: 100
+  batch_size: 64
+  learning_rate: 0.00005  # 5e-5
+  weight_decay: 0.00025  # 2.5e-4
+
+  # 類別權重（V5 可能需要重新調整）
+  use_class_weights: true  # 建議先用自動計算
+  # class_weights: [1.0, 1.0, 1.0]  # 手動指定（可選）
+
+  # 標籤平滑
+  label_smoothing: 0.1
+
+  # 梯度裁剪
+  clip_grad_norm: 0.6
+
+  # 混合精度訓練
+  use_amp: true
+  use_bf16: true  # RTX 5090 原生支持
+
+  # 學習率調度器
+  scheduler:
+    mode: "max"
+    patience: 3
+    factor: 0.6
+    min_lr: 0.000001  # 1e-6
+
+# 硬體配置
+hardware:
+  device: "cuda"
+  num_workers: 4
+  pin_memory: true
+  prefetch_factor: 2
+  persistent_workers: true
+
+# 續訓配置
+resume:
+  enabled: false  # V5 首次訓練，從頭開始
+  checkpoint_path: ""
+  load_optimizer: false
+
+# 其他配置
+misc:
+  seed: 42
+  save_last: true
+
+# =============================================================================
+# V5 預期表現（基於規格書）
+# =============================================================================
+#
+# Triple-Barrier 標籤特性：
+#   - 交易語義一致（止盈/止損/到期）
+#   - 對路徑順序敏感（不只看終點）
+#   - 類別分布可能更均衡（持平不一定偏多）
+#   - 標籤穩健度更高（抗短期噪音）
+#
+# 預期效益（離線）：
+#   - 宏 F1 與 MCC 更穩定（波動較小）
+#   - 覆蓋–命中率曲線在高置信區更陡（可交易性提升）
+#   - 不一定每檔都更高準確率，但整體更穩健
+#
+# 首輪訓練目標：
+#   | 指標 | 目標值 | 說明 |
+#   |------|-------|------|
+#   | Val Acc @ E20 | > 55% | 與 v4 相當或更高 |
+#   | Macro F1 @ E20 | > 70% | 三類平衡指標 |
+#   | MCC @ E20 | > 0.45 | Matthews 相關係數 |
+#   | Grad Norm @ E20 | < 5.0 | 梯度穩定性 |
+#   | Train-Val Gap | < 6% | 泛化能力 |
+#
+# =============================================================================
+# 使用說明
+# =============================================================================
+#
+# 步驟 1：生成 V5 數據（首版推薦百分比法）
+#   python scripts/extract_tw_stock_data_v5.py \
+#       --input-dir ./data/temp \
+#       --output-dir ./data/processed_v5 \
+#       --barrier-type pct \
+#       --alpha-tb 0.002 \
+#       --k-max 10 \
+#       --include-v4-labels
+#
+#   參數說明：
+#   - barrier-type: "pct" 百分比法（首版推薦）
+#   - alpha-tb: 0.002（對齊 v4 的 alpha）
+#   - k-max: 10（對齊 v4 的 k）
+#   - include-v4-labels: 輸出 v4 標籤用於對比分析（首輪必做）
+#
+# 步驟 2：驗證數據生成
+#   ls data/processed_v5/npz/
+#   # 應看到: stock_embedding_train.npz, val, test, normalization_meta.json
+#
+#   檢查 metadata：
+#   cat data/processed_v5/npz/normalization_meta.json | grep -A 5 "tb_stats"
+#   # 確認標籤分布：up/stationary/down
+#
+# 步驟 3：開始訓練（使用此配置）
+#   python scripts/train_deeplob_generic.py \
+#       --config configs/deeplob_v5_config.yaml \
+#       --experiment-name "v5_tb_pct_run1"
+#
+# 步驟 4：監控訓練
+#   tensorboard --logdir logs/
+#
+# 步驟 5：V4 vs V5 對比分析（首輪必做）
+#   如果 --include-v4-labels 啟用，可在評估時輸出 3×3 對應矩陣
+#   python scripts/evaluate_v5.py \
+#       --model checkpoints/v5/best_model.pt \
+#       --data data/processed_v5/npz/stock_embedding_test.npz \
+#       --compare-v4-labels
+#
+# =============================================================================
+# 調參路線圖（V5 穩健化）
+# =============================================================================
+#
+# 首版（推薦預設）：
+#   - barrier_type="pct", alpha_tb=0.002（對齊 v4）
+#   - k_max=10（對齊 v4）
+#   - class_weights 自動計算（基於頻率）
+#
+# 穩健化階段：
+#   - 掃描 alpha_tb ∈ {0.0015, 0.002, 0.0025, 0.003}
+#   - 觀察類別佔比變化（目標：持平 35-55%）
+#   - 選擇 Macro F1 + MCC 最高的配置
+#
+# 進階階段（可選）：
+#   - 嘗試波動率倍數法：
+#     python scripts/extract_tw_stock_data_v5.py \
+#         --barrier-type vol \
+#         --m-vol 2.0 \
+#         --sigma-method EWMA \
+#         --sigma-window 2000
+#   - 對比百分比法 vs 波動率法
+#
+# =============================================================================
+# 故障排除
+# =============================================================================
+#
+# 如果訓練時出現 "KeyError: 'mask'"：
+#   → 確認 V5 數據已正確生成（包含 mask 字段）
+#   → 檢查 use_mask: true 是否啟用
+#
+# 如果標籤分布與預期差異大（持平 < 20% 或 > 70%）：
+#   → 檢查 alpha_tb 是否過大/過小
+#   → 建議範圍：alpha_tb ∈ [0.0015, 0.003]
+#   → 使用 metadata 中的 tb_stats 確認分布
+#
+# 如果 Val Acc 低於 v4（< 54% @ E20）：
+#   → 正常現象（TB 標籤可能更困難）
+#   → 關注 Macro F1 和 MCC 的穩定性
+#   → 嘗試調整 alpha_tb 或使用波動率法
+#
+# 如果 Macro F1 > 70% 但 Val Acc < 55%：
+#   → ✅ 這是好現象！（三類平衡）
+#   → TB 標籤更注重平衡，而非總體準確率
+#
+# 如果過擬合（Train-Val Gap > 8%）：
+#   → 提高 dropout（0.52 → 0.55）
+#   → 提高 weight_decay（0.00025 → 0.0003）
+#
+# =============================================================================
+# 與 v4 的差異摘要
+# =============================================================================
+#
+# 資料生成：
+#   v4: extract_tw_stock_data_v4.py（固定 k 步 Δ%）
+#   V5: extract_tw_stock_data_v5.py（Triple-Barrier）
+#
+# 標籤含義（相同）：
+#   {0:上漲, 1:持平, 2:下跌}
+#
+# 標籤定義（不同）：
+#   v4: t+k 時刻價格相對 t 的變化
+#   V5: t..t+k_max 首次觸及障礙或到期
+#
+# 輸出格式（V5 新增）：
+#   - mask: bool[N] 樣本可用遮罩
+#   - tb_touch_steps: int16[N] 觸發步數（可選）
+#   - y_v4: int8[N] v4 標籤（可選對比）
+#
+# 訓練流程（建議）：
+#   v4: 標準訓練
+#   V5: 需讀取 mask 並過濾無效樣本
+#
+# 評估指標（V5 重點）：
+#   v4: Val Acc, F1
+#   V5: Val Acc, Macro F1, MCC, 覆蓋–命中率曲線
+#
+# =============================================================================

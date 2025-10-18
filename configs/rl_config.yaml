@@ -1,0 +1,107 @@
+# RLlib RecurrentPPO Configuration for LOB Trading
+
+# Algorithm
+algorithm: "PPO"
+framework: "torch"
+
+# Environment
+env: "TaiwanLOBTradingEnv"  # 台股 5檔 LOB 環境（20維特徵）
+env_config:
+  # Data paths
+  data_dir: "data/processed"
+  deeplob_checkpoint: "model/deeplob/deeplob_generic_best.pth"  # 修正: 實際檔案路徑
+
+  # Data sampling (記憶體優化 - 關鍵問題：Ray Workers 不共享記憶體)
+  # 每個 Worker 都會載入獨立數據副本！
+  data_sample_ratio: 0.02  # 使用 2% 數據（~111K 樣本，每 worker ~0.89 GB）
+                           # 總記憶體估算 = num_workers × (0.89 GB 數據 + 0.5 GB 模型 + 0.5 GB 開銷) ≈ num_workers × 1.9 GB
+                           # 8 workers ≈ 15.2 GB + Ray 開銷 4 GB ≈ 19.2 GB (32GB RAM 足夠)
+                           # 建議: 0.01 (56K), 0.015 (84K), 0.02 (111K), 0.025 (140K)
+
+  # Episode configuration
+  max_steps: 500
+  initial_balance: 10000.0
+
+  # Trading parameters
+  transaction_cost_rate: 0.001  # 0.1%
+  max_position: 1  # {-1, 0, 1}
+
+  # Reward shaping
+  reward_config:
+    pnl_scale: 1.0
+    cost_penalty: 1.0
+    inventory_penalty: 0.01
+    risk_penalty: 0.005
+
+# Model Configuration (RLModule API)
+# 使用 TradingLSTMRLModule (新 API) 進行 GPU Learner 訓練
+model_config:
+  lstm_cell_size: 256
+  num_lstm_layers: 2
+  embedding_size: 128
+  vf_share_layers: false  # Separate actor/critic
+  max_seq_len: 100
+
+# PPO Hyperparameters
+lr: 3.0e-4
+gamma: 0.99  # Discount factor
+lambda: 0.95  # GAE lambda
+clip_param: 0.2  # PPO clip parameter
+entropy_coeff: 0.01  # Entropy bonus
+vf_loss_coeff: 1.0  # Value function loss coefficient
+kl_coeff: 0.0
+kl_target: 0.01
+
+# Training (調整以匹配 8 workers)
+train_batch_size: 8192  # 8192 / 8 = 1024 per worker
+sgd_minibatch_size: 512  # 對應調整
+num_sgd_iter: 10
+
+# Rollout (記憶體優化 - 恢復 8 Workers）
+rollout_fragment_length: 1024  # 每個 worker 收集 1024 samples
+num_rollout_workers: 8  # 8 個 workers（每個 worker 獨立載入 2% 數據）
+                        # 8 workers × 0.8 GB = 6.4 GB 總記憶體需求（安全）
+num_envs_per_worker: 1
+batch_mode: "truncate_episodes"
+
+# Exploration
+exploration_config:
+  type: "StochasticSampling"
+
+# Resources (CPU Training - 舊 API Stack)
+# 注意：由於 RLlib 2.50 新 API Stack 與 LSTM+GAE 不兼容
+# 目前使用舊 API Stack (USE_NEW_API_STACK=False)，僅支援 CPU 訓練
+num_gpus: 1.0  # 保留此設定（舊 API 會忽略）
+num_cpus_per_worker: 2  # 每個 worker 使用 2 個 CPU
+num_gpus_per_worker: 0  # Workers 使用 CPU（舊 API 限制）
+
+# Evaluation
+evaluation_interval: 10  # Every N training iterations
+evaluation_duration: 10  # Number of episodes
+evaluation_duration_unit: "episodes"
+evaluation_config:
+  explore: false
+  env_config:
+    max_steps: 500
+
+# Callbacks
+callbacks: "TrainingMonitorCallbacks"
+
+# Checkpointing
+checkpoint_freq: 10
+checkpoint_at_end: true
+keep_checkpoints_num: 5
+checkpoint_score_attr: "episode_reward_mean"
+
+# Logging
+log_level: "INFO"
+log_sys_usage: true
+
+# Debugging
+seed: 42
+log_gradients: false
+recreate_failed_workers: true
+
+# Advanced (RLModule + Learner API for GPU training)
+_enable_learner_api: true  # ✅ 啟用 GPU Learner (10-20x 速度提升)
+_disable_preprocessor_api: false

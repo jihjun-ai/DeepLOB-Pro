@@ -1,0 +1,17 @@
+name: deeplob-pro
+channels:
+  - conda-forge
+dependencies:
+  - python=3.12
+  - pip
+  - numpy>=1.26
+  - pandas>=2.0
+  - scipy>=1.11
+  - scikit-learn>=1.3
+  - numba>=0.58
+  - pip:
+      - triple-barrier
+      - arch
+      - skfolio
+      - vectorbt
+      - nautilus-trader

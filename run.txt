@@ -1,0 +1,135 @@
+conda activate deeplob-pro
+
+##取資料
+python scripts/extract_tw_stock_data_v5.py
+
+
+
+
+
+
+
+取資料
+##新版本
+python scripts/extract_tw_stock_data_v3.py --auto-alpha --relativize --no-cross-day --use-k-buffer --save-normalizer --enforce-label-health-day --alpha-min 0.0005 --alpha-max 0.01
+
+###檢查資料是否有 price 
+python check_data_keys.py
+
+檢查數據
+python scripts/check_processed_data.py
+
+## 訓練 deeplob
+python scripts/train_deeplob_generic.py --config configs/deeplob_generic_config.yaml --epochs 30 --early-stop --test-after-train
+
+## 分析deeplob 數據
+python scripts\monitor_deeplob.py
+
+
+
+
+
+
+
+
+
+
+
+conda activate deeplob
+
+##提取資料前先測試alpha值
+python test_alpha_values.py
+##提取數據
+
+##V3
+python scripts/extract_tw_stock_data_v3.py --temp-dir data/temp --output-dir data/processed --min-ticks 1000 --seq-len 100 --k 50 --alpha-auto-p 0.33 --alpha-min 0.0005 --alpha-max 0.01 --rolling-days 5 --split-mode temporal --max-samples-per-stock-per-day 15000 --enforce-label-health-day --max-class-ratio 0.75 --clip-outliers --clip-sigma 5.0 --clip-mode post
+
+###方案B：完整重訓（最佳品質）
+python scripts/extract_tw_stock_data_v3.py --temp-dir data/temp --output-dir data/processed --min-ticks 1000 --seq-len 100 --k 20 --alpha 0.003 --alpha-min 0.002 --alpha-max 0.005 --rolling-days 5 --split-mode temporal --max-samples-per-stock-per-day 15000 --enforce-label-health-day  --max-class-ratio 0.60 --clip-outliers --clip-sigma 5.0 --clip-mode post
+
+##新版本
+python scripts/extract_tw_stock_data_v3.py --auto-alpha --relativize --no-cross-day --use-k-buffer --save-normalizer
+
+##模型測試
+python scripts/train_deeplob_generic.py --config configs/deeplob_generic_config.yaml --test-only --resume checkpoints/deeplob_generic_best.pth
+
+
+##自動批次
+REEXTRACT_DATA.bat
+
+
+檢查數據
+python scripts/check_processed_data.py
+
+"""特徵異常值診斷腳本
+python scripts/diagnose_features.py
+
+步驟 1: 快速測試（1 epoch，約 3-5 分鐘）
+python scripts/train_deeplob_generic.py --config configs/deeplob_generic_config.yaml --epochs 1 --early-stop --early-stop-patience 5
+
+正常執行(訓練)
+python scripts/train_deeplob_generic.py --config configs/deeplob_generic_config.yaml --epochs 30 --early-stop --test-after-train
+
+完美！現在您可以執行這個測試腳本：
+python scripts/test_best_model.py
+
+
+### RL ppo
+    # 完整訓練 (500 迭代)
+    python scripts/train_rl.py --num-iterations 500 --num-workers 16
+	python scripts/train_rl.py --num-iterations 500 --num-workers  4 --num-gpus 1 --no-resume
+
+### RL 訓練後
+快速評估
+
+python scripts/evaluate_rl_quick.py --num-episodes 10
+
+
+檢查 1: 測試真實台股成本（關鍵！）
+python scripts/evaluate_rl_quick.py --num-episodes 100 --transaction-cost 0.00442 --data-mode test
+
+
+
+
+# 1. 刪除無效的舊模型(新訓) 
+#rm checkpoints/*.pth
+
+# 2. 重新訓練（使用修正後的腳本） == 棄用
+#python scripts/train_deeplob_stock_embedding.py
+
+##建立通用腳本
+# 1. 執行訓練（30 epochs，預計 2-4 小時）
+python scripts/train_deeplob_generic.py --config configs/deeplob_generic_config.yaml --early-stop 
+
+python scripts/train_deeplob_generic.py --config configs/deeplob_generic_config.yaml --early-stop --early-stop-patience 10 --test-after-train
+
+#python scripts/train_deeplob_generic.py --config configs/deeplob_generic_config.yaml
+
+python scripts/train_deeplob_generic.py --config configs/deeplob_generic_config.yaml --early-stop --early-stop-patience 10 --test-after-train
+
+⚠️  發現 1 個問題：
+  1. ❌ 特徵尺度差異大：最大標準差 (5.63) 是最小標準差 (1.87) 的 3.0 倍
+python scripts/clip_features.py --process-all --threshold 5.0
+
+
+
+
+最佳解決方案：在標準化後加入 Clipping
+tensorboard --logdir=logs/deeplob_stock_embedding --port=6006
+
+
+
+
+# 3. 驗證新模型
+python scripts/quick_validate_deeplob.py
+
+
+
+組合 A：溫和降溫（推薦 ⭐⭐⭐）
+我已經幫您修改了：
+✅ Batch Size: 1024 → 768 (-25% GPU 使用)
+✅ Num Workers: 8 → 4 (-50% 數據載入負載)
+預期:
+GPU 利用率: 94% → 70-80%
+溫度: 78°C → 65-70°C
+訓練時間: 每 epoch +20%（可接受）

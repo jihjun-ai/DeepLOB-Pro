@@ -1,0 +1,202 @@
+# ========== 股票交易 RL 配置文件 ==========
+# 用於訓練基於技術指標 + DeepLOB 預測的 PPO 交易策略
+# 支援每日訓練、多股票、續訓場景
+#
+# 使用方式:
+#   python scripts/train_stock_rl.py --config configs/stock_rl_config.yaml
+#
+# 更新日期: 2025-10-10
+# 版本: v2.0 (整合 DeepLOB)
+
+# ========== 環境配置 ==========
+env_config:
+  # 數據路徑
+  data_dir: "data/processed"  # CSV 文件目錄
+
+  # 特徵配置
+  max_features: 128  # 最大特徵維度（預留擴充空間）
+  normalize: true    # 是否標準化數據
+
+  # Episode 配置
+  max_steps: 500     # 每個 episode 的最大步數
+  initial_balance: 10000.0  # 初始資金
+
+  # 交易參數
+  transaction_cost_rate: 0.001  # 交易成本率 (0.1%)
+  max_position: 10   # 最大持倉數量
+  shares_per_trade: 1  # 每次交易股數
+
+  # 數據選擇（可選）
+  stock_id: null     # 指定股票編號（null = 隨機選取）
+  date: null         # 指定日期（null = 使用所有日期）
+
+  # ========== DeepLOB 雙模型整合配置 ==========
+  use_deeplob: false  # 是否使用 DeepLOB 價格預測（⚠️ 需先實現 LOB 數據載入）
+
+  # LOB 數據路徑（與 DeepLOB 訓練使用相同的數據）
+  lob_data_path: "data/processed/stock_embedding_train.npz"  # LOB 序列數據
+  # 注意：此文件由 scripts/extract_tw_stock_data_v2.py 生成
+
+  # ===== 雙模型配置（方案 2: 兩個獨立模型） =====
+  # 個股特化模型檢查點（用於訓練過的股票，準確率 65-70%）
+  deeplob_stock_checkpoint: "checkpoints/deeplob_stock_embedding_best.pth"
+
+  # 通用模型檢查點（用於任何股票，準確率 55-65%）
+  deeplob_generic_checkpoint: "checkpoints/deeplob_generic_best.pth"
+
+  # 注意：
+  # - 至少需要提供一個檢查點
+  # - 建議同時提供兩個檢查點以獲得最佳性能
+  # - 雙模型管理器會自動選擇最合適的模型進行推理
+
+  # DeepLOB 基本配置
+  deeplob_seq_len: 100  # DeepLOB 輸入序列長度
+  lob_features: 20   # LOB 特徵維度（台股 5 檔 × 4 = 20）
+
+  # DeepLOB 模型參數（⚠️ 必須與訓練時一致！）
+  deeplob_config:
+    num_stocks: 250  # 股票數量（僅個股模型使用）
+    embedding_dim: 32  # 股票嵌入維度（僅個股模型使用）
+    num_classes: 3   # 輸出類別數
+    lstm_hidden_size: 64
+    dropout: 0.2
+
+  # 獎勵函數配置
+  reward_config:
+    pnl_scale: 1.0   # PnL 獎勵縮放係數
+    cost_penalty: 1.0  # 交易成本懲罰係數
+    inventory_penalty: 0.01  # 庫存懲罰係數
+    risk_penalty: 0.005  # 風險懲罰係數
+
+# ========== 模型配置 ==========
+model_config:
+  # LSTM 參數
+  lstm_cell_size: 256  # LSTM 隱藏層大小
+  num_lstm_layers: 2   # LSTM 層數
+  max_seq_len: 100     # 最大序列長度
+
+  # Embedding 參數
+  embedding_dim: 128   # Embedding 維度
+
+  # Dropout（防止過擬合）
+  dropout: 0.2
+
+  # Actor-Critic 架構
+  vf_share_layers: false  # Actor 和 Critic 不共享層
+
+# ========== 訓練配置 ==========
+training_config:
+  # PPO 超參數
+  lr: 3.0e-4         # 學習率
+  gamma: 0.99        # 折扣因子
+  lambda: 0.95       # GAE Lambda
+  clip_param: 0.2    # PPO 裁剪參數
+  entropy_coeff: 0.01  # 熵係數（鼓勵探索）
+  kl_coeff: 0.2      # KL 散度係數
+  kl_target: 0.01    # KL 散度目標
+
+  # 批次大小
+  train_batch_size: 4096   # 訓練批次大小
+  sgd_minibatch_size: 512  # SGD 小批次大小
+  num_sgd_iter: 10    # SGD 迭代次數
+
+  # 梯度裁剪（防止梯度爆炸）
+  grad_clip: 0.5
+
+  # 價值函數
+  vf_loss_coeff: 0.5  # 價值函數損失係數
+
+  # 評估配置
+  evaluation_interval: 10  # 評估間隔（迭代次數）
+  evaluation_duration: 10  # 評估 episode 數量
+
+# ========== 資源配置 ==========
+resources:
+  # GPU 配置
+  num_gpus: 1.0      # Learner GPU 數量
+  num_gpus_per_worker: 0  # 每個 worker 的 GPU 數量
+
+  # CPU 配置
+  num_cpus: 16       # 總 CPU 數量
+  num_cpus_per_worker: 2  # 每個 worker 的 CPU 數量
+
+  # Worker 配置
+  num_rollout_workers: 8  # Rollout workers 數量
+  rollout_fragment_length: 200  # Rollout 片段長度
+
+# ========== 檢查點與續訓配置 ==========
+checkpoint:
+  checkpoint_dir: "checkpoints/stock_rl"  # 檢查點目錄
+  checkpoint_interval: 50  # 檢查點保存間隔（迭代次數）
+
+  # 續訓配置
+  resume:
+    enabled: true  # 是否啟用自動續訓（預設 true）
+    checkpoint_path: null  # 指定檢查點路徑（null = 自動搜尋最新）
+
+    # 自動搜尋優先順序
+    # 1. final_model (最終模型)
+    # 2. best_model (最佳模型)
+    # 3. checkpoint_* (最新檢查點)
+
+  # 模型保存策略
+  save_best_only: false  # 是否只保存最佳模型
+  save_final: true  # 是否保存最終模型
+  keep_checkpoints: 5  # 保留最近 N 個檢查點（0 = 全部保留）
+
+# ========== 日誌配置 ==========
+logging:
+  log_dir: "logs/stock_rl"  # TensorBoard 日誌目錄
+  log_level: "INFO"          # 日誌級別
+
+# ========== 每日訓練配置 ==========
+daily_training:
+  enabled: true       # 是否啟用每日訓練模式
+  auto_resume: true   # 自動續訓
+  stocks_per_day: 250  # 每日訓練股票數量
+  iterations_per_day: 100  # 每日訓練迭代次數
+
+# ========== 特徵擴充配置 ==========
+# 當添加新特徵時，更新以下配置
+feature_expansion:
+  # 當前使用的特徵數量（自動檢測）
+  current_features: null  # null = 自動檢測
+
+  # 預留的特徵空間
+  reserved_features: 128
+
+  # 特徵名稱（可選，用於記錄）
+  feature_names:
+    - "Open"
+    - "High"
+    - "Low"
+    - "Close"
+    - "Volume"
+    - "Ema5"
+    - "Ema10"
+    - "Ema20"
+    - "Sma5"
+    - "Sma10"
+    - "Sma20"
+    - "BollingerUpper"
+    - "BollingerLower"
+    - "Macd"
+    - "SignalLine"
+    - "Rsi"
+    - "Atr"
+    - "GoldenCross"
+    - "DeathCross"
+    - "Mfi"
+    - "Vwap"
+    - "AvgVolume20"
+    # 未來可添加更多特徵...
+
+# ========== 實驗配置 ==========
+experiment:
+  name: "stock_ppo_v1"  # 實驗名稱
+  tags:
+    - "stock_trading"
+    - "ppo"
+    - "lstm"
+    - "daily_training"
+  description: "股票技術指標 PPO 交易策略（每日訓練）"
