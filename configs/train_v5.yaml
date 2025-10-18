@@ -80,7 +80,7 @@ model:
   conv3_filters: 32
   lstm_hidden_size: 48  # 降低容量（64→48，減少過擬合）
   fc_hidden_size: 48    # 降低容量（64→48，減少過擬合）
-  dropout: 0.5  # 增強 dropout（0.3→0.5，對抗嚴重過擬合：val loss 持續上升）
+  dropout: 0.3  # 降低正則化（0.5→0.3，#2欠擬合：過度抑制學習）
 
   # Stock Embeddings（当 data.use_stock_ids=true 生效）
   embeddings:
@@ -104,17 +104,17 @@ loss:
 
   # 标签平滑
   label_smoothing:
-    global: 0.1  # 全局平滑（0.05→0.1，增強正則化）
+    global: 0.05  # 全局平滑（0.1→0.05，#2欠擬合：降低平滑強度）
     flat_bonus: 0.00  # 持平类额外平滑（0~0.05）
 
 # ==================== 优化器配置 ====================
 optim:
   name: "adamw"
-  lr: 0.00001  # 極低學習率（LSTM 梯度爆炸防護，從 0.00003 → 0.00001）
-  weight_decay: 0.001  # 增強權重衰減（0.0001→0.001，10倍增強對抗過擬合）
-  grad_clip: 0.5  # 放寬梯度裁剪（0.2→0.5，0.2太嚴格阻礙學習，但仍需控制grad_norm>10的問題）
-  amp: true  # 混合精度训练（必須啟用才能使用 BF16）
-  use_bf16: true  # RTX 5090 原生支持 BF16（數值穩定性優於 FP16）
+  lr: 0.0003  # 提高學習率（0.00001→0.0003，#2欠擬合：提高30倍讓模型學起來）
+  weight_decay: 0.0001  # 降低權重衰減（0.001→0.0001，#2欠擬合：降低10倍）
+  grad_clip: 2.0  # 放寬梯度裁剪（0.5→2.0，#2欠擬合：grad_norm僅0.6-1.7太低）
+  amp: false  # 混合精度训练（關閉：BF16導致LSTM梯度NaN）
+  use_bf16: false  # RTX 5090 原生支持 BF16（關閉：數值不穩定）
 
   # AdamW 额外参数
   betas: [0.9, 0.999]
@@ -124,8 +124,8 @@ optim:
 # ==================== 学习率调度器 ====================
 sched:
   name: "cosine"  # cosine warmup + decay
-  warmup_ratio: 0.05  # 前 5% epochs 预热
-  eta_min: 1.0e-6  # cosine 最小学习率
+  warmup_ratio: 0.1  # 前 10% epochs 预热（0.05→0.1，延長穩定期）
+  eta_min: 1.0e-5  # cosine 最小学习率（1e-6→1e-5，提高最低LR）
 
 # ==================== 训练配置 ====================
 train:
@@ -135,7 +135,7 @@ train:
   # 早停
   early_stop:
     metric: "val.f1_macro_weighted"  # 以加权 macro-F1 为准
-    patience: 5  # 更激進早停（10→5，因val loss持續上升）
+    patience: 10  # 給更多機會（5→10，#2欠擬合：讓模型充分學習）
     mode: "max"
 
 # ==================== 评估配置 ====================
