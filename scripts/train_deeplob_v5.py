@@ -41,6 +41,7 @@ import itertools
 
 # PyTorch 2.6 安全加载所需
 from ruamel.yaml.scalarfloat import ScalarFloat
+from ruamel.yaml.scalarstring import DoubleQuotedScalarString
 
 # 添加 src 到路径
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
@@ -898,8 +899,8 @@ def main():
             logger.info(f"載入檢查點: {checkpoint_path}")
             logger.info("=" * 70)
 
-            # PyTorch 2.6 安全加载：允许 ruamel.yaml 的 ScalarFloat 类型
-            with torch.serialization.safe_globals([ScalarFloat]):
+            # PyTorch 2.6 安全加载：允许 ruamel.yaml 的类型
+            with torch.serialization.safe_globals([ScalarFloat, DoubleQuotedScalarString]):
                 checkpoint = torch.load(checkpoint_path, map_location=device, weights_only=True)
 
             # 載入模型權重
@@ -1011,8 +1012,8 @@ def main():
     # ========== 载入最佳模型并评估 ==========
     best_model_path = os.path.join(output_dir, 'deeplob_v5_best.pth')
 
-    # PyTorch 2.6 安全加载：允许 ruamel.yaml 的 ScalarFloat 类型
-    with torch.serialization.safe_globals([ScalarFloat]):
+    # PyTorch 2.6 安全加载：允许 ruamel.yaml 的类型
+    with torch.serialization.safe_globals([ScalarFloat, DoubleQuotedScalarString]):
         checkpoint = torch.load(best_model_path, map_location=device, weights_only=True)
 
     model.load_state_dict(checkpoint['model_state_dict'])

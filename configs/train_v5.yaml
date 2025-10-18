@@ -56,7 +56,7 @@ data:
 
 # ==================== DataLoader 配置 ====================
 dataloader:
-  batch_size: 512  # FP32 模式下增大 batch（256→512，利用 RTX 5090 的 32GB 顯存）
+  batch_size: 256  # 減小 batch（512→256，增強正則化效果對抗過擬合）
   num_workers: 4  # 自动调整
   pin_memory: true
 
@@ -78,9 +78,9 @@ model:
   conv1_filters: 32
   conv2_filters: 32
   conv3_filters: 32
-  lstm_hidden_size: 64
-  fc_hidden_size: 64
-  dropout: 0.3  # 降低 dropout（LSTM 正交初始化後更穩定，從 0.52 → 0.3）
+  lstm_hidden_size: 48  # 降低容量（64→48，減少過擬合）
+  fc_hidden_size: 48    # 降低容量（64→48，減少過擬合）
+  dropout: 0.5  # 增強 dropout（0.3→0.5，對抗嚴重過擬合：val loss 持續上升）
 
   # Stock Embeddings（当 data.use_stock_ids=true 生效）
   embeddings:
@@ -104,15 +104,15 @@ loss:
 
   # 标签平滑
   label_smoothing:
-    global: 0.05  # 全局平滑
+    global: 0.1  # 全局平滑（0.05→0.1，增強正則化）
     flat_bonus: 0.00  # 持平类额外平滑（0~0.05）
 
 # ==================== 优化器配置 ====================
 optim:
   name: "adamw"
   lr: 0.00001  # 極低學習率（LSTM 梯度爆炸防護，從 0.00003 → 0.00001）
-  weight_decay: 0.0001
-  grad_clip: 0.2  # 極嚴格梯度裁剪（從 0.5 → 0.2，防止梯度累積）
+  weight_decay: 0.001  # 增強權重衰減（0.0001→0.001，10倍增強對抗過擬合）
+  grad_clip: 0.5  # 放寬梯度裁剪（0.2→0.5，0.2太嚴格阻礙學習，但仍需控制grad_norm>10的問題）
   amp: false  # 混合精度训练
   use_bf16: true  # RTX 5090 原生支持 BF16（數值穩定性優於 FP16）
 
@@ -129,13 +129,13 @@ sched:
 
 # ==================== 训练配置 ====================
 train:
-  epochs: 50
+  epochs: 30  # 縮短訓練（50→30，因19個epoch已過擬合嚴重）
   accumulate_steps: 1  # 梯度累积
 
   # 早停
   early_stop:
     metric: "val.f1_macro_weighted"  # 以加权 macro-F1 为准
-    patience: 10
+    patience: 5  # 更激進早停（10→5，因val loss持續上升）
     mode: "max"
 
 # ==================== 评估配置 ====================
