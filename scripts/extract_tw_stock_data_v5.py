@@ -163,8 +163,8 @@ def ewma_vol(close: pd.Series, halflife: int = 60) -> pd.Series:
         vol: 波动率序列
     """
     ret = np.log(close).diff()
-    var = ret.ewm(halflife=halflife, adjust=False).var(ddof=1)
-    vol = np.sqrt(var).fillna(method="bfill")
+    var = ret.ewm(halflife=halflife, adjust=False).var()
+    vol = np.sqrt(var).bfill()
     return vol
 
 
@@ -195,7 +195,7 @@ def yang_zhang_vol(ohlc: pd.DataFrame, window: int = 60) -> pd.Series:
     sigma_rs = rs.rolling(window).mean()
 
     yz = sigma_o + k * sigma_c + (1 - k) * sigma_rs
-    vol = np.sqrt(yz).replace([np.inf, -np.inf], np.nan).fillna(method="bfill")
+    vol = np.sqrt(yz).replace([np.inf, -np.inf], np.nan).bfill()
 
     return vol
 
@@ -224,7 +224,7 @@ def garch11_vol(close: pd.Series) -> pd.Series:
         fcast = res.forecast(horizon=1, reindex=True).variance
         vol = np.sqrt(fcast.squeeze()) / 100.0
 
-        return vol.reindex(close.index).fillna(method="bfill")
+        return vol.reindex(close.index).bfill()
 
     except Exception as e:
         logging.warning(f"GARCH 失败: {e}，回退到 EWMA")
@@ -242,7 +242,7 @@ def tb_labels(close: pd.Series,
               max_holding: int = 200,
               min_return: float = 0.0001) -> pd.DataFrame:
     """
-    Triple-Barrier 标签生成（使用 triple-barrier PyPI 包）
+    Triple-Barrier 标签生成（自定义实现）
 
     Args:
         close: 收盘价序列
@@ -262,37 +262,71 @@ def tb_labels(close: pd.Series,
             - dn_p: 止损价格
     """
     try:
-        from triple_barrier import triple_barrier as tb
+        n = len(close)
+        results = []
 
-        events = tb.get_events(
-            close=close.values,
-            daily_vol=vol.values,
-            tp_multiplier=pt_mult,
-            sl_multiplier=sl_mult,
-            max_holding=max_holding
-        )
+        for i in range(n - 1):
+            entry_price = close.iloc[i]
+            entry_vol = vol.iloc[i]
 
-        bins = tb.get_bins(close.values, events)
+            # 计算止盈止损价格
+            up_barrier = entry_price * (1 + pt_mult * entry_vol)
+            dn_barrier = entry_price * (1 - sl_mult * entry_vol)
 
-        out = pd.DataFrame(index=close.index[:len(bins)])
-        out["ret"] = bins["ret"].astype(float)
+            # 查找触发点
+            end_idx = min(i + max_holding, n)
+            triggered = False
+            trigger_idx = end_idx - 1
+            trigger_why = 'time'
 
-        # 应用最小报酬阈值
-        out["y"] = np.where(
-            np.abs(out["ret"]) < min_return,
-            0,  # 持平
-            np.sign(out["ret"])  # -1 或 1
-        ).astype(int)
+            for j in range(i + 1, end_idx):
+                future_price = close.iloc[j]
 
-        out["tt"] = events["t1"]
+                # 检查是否触及止盈
+                if future_price >= up_barrier:
+                    trigger_idx = j
+                    trigger_why = 'up'
+                    triggered = True
+                    break
 
-        # 映射触发原因
-        m = {"tp": "up", "sl": "down", "t1": "time"}
-        out["why"] = pd.Series(events["label"]).map(m).values
+                # 检查是否触及止损
+                if future_price <= dn_barrier:
+                    trigger_idx = j
+                    trigger_why = 'down'
+                    triggered = True
+                    break
 
-        # 计算止盈止损价格
-        out["up_p"] = close.iloc[:len(bins)] * (1 + pt_mult * vol.iloc[:len(bins)])
-        out["dn_p"] = close.iloc[:len(bins)] * (1 - sl_mult * vol.iloc[:len(bins)])
+            # 计算实际收益
+            exit_price = close.iloc[trigger_idx]
+            ret = (exit_price - entry_price) / entry_price
+
+            # 应用最小报酬阈值
+            if np.abs(ret) < min_return:
+                label = 0  # 持平
+            else:
+                label = int(np.sign(ret))  # -1 或 1
+
+            results.append({
+                'ret': ret,
+                'y': label,
+                'tt': trigger_idx - i,
+                'why': trigger_why,
+                'up_p': up_barrier,
+                'dn_p': dn_barrier
+            })
+
+        # 为最后一个点添加默认值
+        if n > 0:
+            results.append({
+                'ret': 0.0,
+                'y': 0,
+                'tt': 0,
+                'why': 'time',
+                'up_p': close.iloc[-1],
+                'dn_p': close.iloc[-1]
+            })
+
+        out = pd.DataFrame(results, index=close.index)
 
         global_stats["tb_success"] += 1
 
