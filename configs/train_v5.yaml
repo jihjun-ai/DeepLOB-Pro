@@ -60,9 +60,9 @@ dataloader:
   num_workers: 4  # 自动调整
   pin_memory: true
 
-  # 平衡采样器（啟用以應對極端不平衡）
+  # 平衡采样器（暫時關閉，避免過度擬合少數類）
   balance_sampler:
-    enabled: true  # 啟用！Class 1 僅 2.2%
+    enabled: false  # 關閉！改用 class_weights 處理不平衡
     strategy: "inv_freq"  # 逆频率采样
 
 # ==================== 模型配置 ====================

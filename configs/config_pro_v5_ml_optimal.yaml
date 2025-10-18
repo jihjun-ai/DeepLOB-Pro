@@ -30,12 +30,12 @@ volatility:
   method: 'ewma'  # EWMA 對高頻數據反應更快
   halflife: 60    # 60 bars 半衰期 ≈ 5-10 分鐘
 
-# Triple-Barrier 參數（優化以增加持平比例到 30-40%）
+# Triple-Barrier 參數（進階調整：目標 Class 1 約 30-40%）
 triple_barrier:
-  pt_multiplier: 6.0   # 止盈：6.0σ（大幅放寬，減少提前觸發）
-  sl_multiplier: 6.0   # 止損：6.0σ（對稱設計）
-  max_holding: 40      # 最大持有：40 bars（縮短窗口，增加到期比例）
-  min_return: 0.0015   # 閾值：0.15%（提高閾值，更多到期樣本→持平）
+  pt_multiplier: 3.0   # 止盈：3.0σ（放寬，減少提前觸發，增加到期樣本）
+  sl_multiplier: 3.0   # 止損：3.0σ（對稱設計）
+  max_holding: 50      # 最大持有：50 bars（適中窗口）
+  min_return: 0.0008   # 閾值：0.08%（約 0.8-8 個 tick，進一步提高以增加持平比例）
 
 # 樣本權重（幫助模型學習困難樣本）
 sample_weights:

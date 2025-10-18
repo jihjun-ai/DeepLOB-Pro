@@ -7,12 +7,12 @@ volatility:
   method: 'ewma'  # 'ewma', 'garch'
   halflife: 60    # EWMA 半衰期（bars）
 
-# Triple-Barrier 參數（激進調整：目標持平類 50-70%）
+# Triple-Barrier 參數（優化調整：目標持平類 60-70%）
 triple_barrier:
-  pt_multiplier: 5.0   # 止盈倍數（2.0→5.0，大幅放寬避免誤觸發）
-  sl_multiplier: 5.0   # 止損倍數（2.0→5.0，大幅放寬避免誤觸發）
-  max_holding: 50      # 最大持有期（200→50，縮短判斷窗口）
-  min_return: 0.002    # 最小報酬閾值（0.01%→0.2%，提高20倍！只有明確趨勢才算上漲/下跌）
+  pt_multiplier: 2.0   # 止盈倍數（2倍波動率，學術標準）
+  sl_multiplier: 2.0   # 止損倍數（2倍波動率，學術標準）
+  max_holding: 50      # 最大持有期（縮短判斷窗口）
+  min_return: 0.0002   # 最小報酬閾值（0.02%，接近台股最小跳動單位）
 
 # 樣本權重
 sample_weights:

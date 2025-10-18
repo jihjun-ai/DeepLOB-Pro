@@ -300,11 +300,11 @@ def tb_labels(close: pd.Series,
             exit_price = close.iloc[trigger_idx]
             ret = (exit_price - entry_price) / entry_price
 
-            # 应用最小报酬阈值
+            # 应用最小报酬阈值（核心修正：所有样本都要检查阈值）
             if np.abs(ret) < min_return:
-                label = 0  # 持平
+                label = 0  # 持平（收益太小，视为无趋势）
             else:
-                label = int(np.sign(ret))  # -1 或 1
+                label = int(np.sign(ret))  # -1（下跌）或 1（上涨）
 
             results.append({
                 'ret': ret,
