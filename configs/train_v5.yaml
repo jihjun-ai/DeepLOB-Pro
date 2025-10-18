@@ -56,13 +56,13 @@ data:
 
 # ==================== DataLoader 配置 ====================
 dataloader:
-  batch_size: 256  # 減小 batch（512→256，增強正則化效果對抗過擬合）
+  batch_size: 512  # 增大 batch（256→512，穩定梯度估計）
   num_workers: 4  # 自动调整
   pin_memory: true
 
-  # 平衡采样器（预设关闭）
+  # 平衡采样器（啟用以應對極端不平衡）
   balance_sampler:
-    enabled: false  # 仅在极端不平衡时启用
+    enabled: true  # 啟用！Class 1 僅 2.2%
     strategy: "inv_freq"  # 逆频率采样
 
 # ==================== 模型配置 ====================
@@ -78,9 +78,9 @@ model:
   conv1_filters: 32
   conv2_filters: 32
   conv3_filters: 32
-  lstm_hidden_size: 48  # 降低容量（64→48，減少過擬合）
-  fc_hidden_size: 48    # 降低容量（64→48，減少過擬合）
-  dropout: 0.3  # 降低正則化（0.5→0.3，#2欠擬合：過度抑制學習）
+  lstm_hidden_size: 32  # 大幅縮小（48→32，控制過擬合）
+  fc_hidden_size: 32    # 大幅縮小（48→32，控制過擬合）
+  dropout: 0.5  # 提高正則化（0.3→0.5，對抗過擬合）
 
   # Stock Embeddings（当 data.use_stock_ids=true 生效）
   embeddings:
@@ -97,22 +97,22 @@ model:
 
 # ==================== 损失函数配置 ====================
 loss:
-  type: "ce"  # 或 "focal"
+  type: "ce"  # CrossEntropy（train_v5.py 目前只支持 ce）
 
-  # 类别权重
+  # 类别权重（自動處理不平衡）
   class_weights: "auto"  # "auto"（逆频率）或 "none"
 
-  # 标签平滑
+  # 标签平滑（關閉，不平衡時有害）
   label_smoothing:
-    global: 0.05  # 全局平滑（0.1→0.05，#2欠擬合：降低平滑強度）
+    global: 0.0  # 關閉平滑
     flat_bonus: 0.00  # 持平类额外平滑（0~0.05）
 
 # ==================== 优化器配置 ====================
 optim:
   name: "adamw"
-  lr: 0.0003  # 提高學習率（0.00001→0.0003，#2欠擬合：提高30倍讓模型學起來）
-  weight_decay: 0.0001  # 降低權重衰減（0.001→0.0001，#2欠擬合：降低10倍）
-  grad_clip: 2.0  # 放寬梯度裁剪（0.5→2.0，#2欠擬合：grad_norm僅0.6-1.7太低）
+  lr: 0.00005  # 大幅降低學習率（0.0001→0.00005，對抗梯度爆炸）
+  weight_decay: 0.0005  # 提高權重衰減（0.0001→0.0005，增強正則化）
+  grad_clip: 0.5  # 強力裁剪（1.0→0.5，控制 grad norm 爆炸）
   amp: false  # 混合精度训练（關閉：BF16導致LSTM梯度NaN）
   use_bf16: false  # RTX 5090 原生支持 BF16（關閉：數值不穩定）
 
@@ -124,18 +124,18 @@ optim:
 # ==================== 学习率调度器 ====================
 sched:
   name: "cosine"  # cosine warmup + decay
-  warmup_ratio: 0.1  # 前 10% epochs 预热（0.05→0.1，延長穩定期）
-  eta_min: 1.0e-5  # cosine 最小学习率（1e-6→1e-5，提高最低LR）
+  warmup_ratio: 0.15  # 延長預熱（0.1→0.15，給梯度更多穩定時間）
+  eta_min: 5.0e-6  # 降低最小LR（1e-5→5e-6，允許更多fine-tune）
 
 # ==================== 训练配置 ====================
 train:
-  epochs: 30  # 縮短訓練（50→30，因19個epoch已過擬合嚴重）
+  epochs: 40  # 延長訓練（30→40，小LR需更多epochs）
   accumulate_steps: 1  # 梯度累积
 
   # 早停
   early_stop:
     metric: "val.f1_macro_weighted"  # 以加权 macro-F1 为准
-    patience: 10  # 給更多機會（5→10，#2欠擬合：讓模型充分學習）
+    patience: 8  # 縮短耐心（10→8，快速止損過擬合）
     mode: "max"
 
 # ==================== 评估配置 ====================

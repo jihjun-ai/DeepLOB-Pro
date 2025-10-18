@@ -659,12 +659,12 @@ def sliding_windows_v5(
 
         stock_sequences.append((sym, X_concat.shape[0], X_concat, mids_concat))
 
-    # 按时间点数量排序
-    stock_sequences.sort(key=lambda x: x[1], reverse=True)
+    # 按时间点数量排序（仅用于统计）
+    stock_sequences_sorted = sorted(stock_sequences, key=lambda x: x[1], reverse=True)
 
     logging.info(f"\n股票时间点统计:")
-    logging.info(f"  最多: {stock_sequences[0][1]} 个点 ({stock_sequences[0][0]})")
-    logging.info(f"  最少: {stock_sequences[-1][1]} 个点 ({stock_sequences[-1][0]})")
+    logging.info(f"  最多: {stock_sequences_sorted[0][1]} 个点 ({stock_sequences_sorted[0][0]})")
+    logging.info(f"  最少: {stock_sequences_sorted[-1][1]} 个点 ({stock_sequences_sorted[-1][0]})")
 
     # 步骤 2: 过滤太短的股票序列
     MIN_POINTS = SEQ_LEN + 50  # 100 + 50 = 150
@@ -681,7 +681,13 @@ def sliding_windows_v5(
 
     logging.info(f"有效股票: {len(valid_stocks)} 档")
 
-    # 步骤 3: 按股票数量切分 70/15/15
+    # 步骤 3: 随机打乱后按股票数量切分 70/15/15（避免分布偏移）
+    import random
+    SPLIT_SEED = config.get('split', {}).get('seed', 42)
+    random.Random(SPLIT_SEED).shuffle(valid_stocks)
+
+    logging.info(f"使用随机种子 {SPLIT_SEED} 打乱股票顺序（避免选择偏差）")
+
     n_stocks = len(valid_stocks)
     n_train = max(1, int(n_stocks * config['split']['train_ratio']))
     n_val = max(1, int(n_stocks * config['split']['val_ratio']))

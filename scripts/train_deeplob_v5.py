@@ -747,6 +747,19 @@ def main():
 
     # ========== 载入正规化元数据 ==========
     norm_meta_path = config['data']['norm_meta']
+
+    # 確保使用絕對路徑（相對於專案根目錄）
+    if not os.path.isabs(norm_meta_path):
+        project_root = Path(__file__).resolve().parent.parent
+        norm_meta_path = os.path.join(project_root, norm_meta_path)
+
+    if not os.path.exists(norm_meta_path):
+        raise FileNotFoundError(
+            f"找不到正規化元數據: {norm_meta_path}\n"
+            f"當前工作目錄: {os.getcwd()}\n"
+            f"請確保從專案根目錄執行: python scripts/train_deeplob_v5.py"
+        )
+
     with open(norm_meta_path, 'r', encoding='utf-8') as f:
         norm_meta = json.load(f)
 
@@ -768,14 +781,22 @@ def main():
     logger.info("载入数据集")
     logger.info("=" * 70)
 
+    # 確保數據路徑為絕對路徑
+    project_root = Path(__file__).resolve().parent.parent
+
+    def get_abs_path(rel_path: str) -> str:
+        if os.path.isabs(rel_path):
+            return rel_path
+        return os.path.join(project_root, rel_path)
+
     train_dataset = LOBV5Dataset(
-        config['data']['train'], config, split='train', norm_meta=norm_meta
+        get_abs_path(config['data']['train']), config, split='train', norm_meta=norm_meta
     )
     val_dataset = LOBV5Dataset(
-        config['data']['val'], config, split='val', norm_meta=norm_meta
+        get_abs_path(config['data']['val']), config, split='val', norm_meta=norm_meta
     )
     test_dataset = LOBV5Dataset(
-        config['data']['test'], config, split='test', norm_meta=norm_meta
+        get_abs_path(config['data']['test']), config, split='test', norm_meta=norm_meta
     )
 
     # ===== 驗證資料維度與模型配置一致性 =====
