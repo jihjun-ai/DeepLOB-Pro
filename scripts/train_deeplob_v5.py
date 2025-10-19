@@ -39,8 +39,13 @@ import matplotlib.pyplot as plt
 from tqdm import tqdm
 import itertools
 
+# Configure matplotlib to support Chinese characters
+plt.rcParams['font.sans-serif'] = ['Microsoft YaHei', 'SimHei', 'DejaVu Sans']
+plt.rcParams['axes.unicode_minus'] = False  # Fix minus sign display
+
 # PyTorch 2.6 安全加载所需
 from ruamel.yaml.scalarfloat import ScalarFloat
+from ruamel.yaml.scalarint import ScalarInt
 from ruamel.yaml.scalarstring import DoubleQuotedScalarString
 
 # 添加 src 到路径
@@ -591,7 +596,7 @@ def plot_confusion_matrix(
     plt.title(title)
     plt.colorbar()
 
-    classes = ['下跌(0)', '持平(1)', '上涨(2)']
+    classes = ['Down (0)', 'Flat (1)', 'Up (2)']
     tick_marks = np.arange(len(classes))
     plt.xticks(tick_marks, classes, rotation=45)
     plt.yticks(tick_marks, classes)
@@ -824,7 +829,45 @@ def main():
         dataloader_kwargs['prefetch_factor'] = config['hardware']['prefetch_factor']
         dataloader_kwargs['persistent_workers'] = config['hardware']['persistent_workers']
 
-    train_loader = DataLoader(train_dataset, shuffle=True, **dataloader_kwargs)
+    # ========== 平衡采样器（可选） ==========
+    train_sampler = None
+    if config['dataloader']['balance_sampler']['enabled']:
+        logger.info("\n" + "=" * 70)
+        logger.info("创建平衡采样器（Balanced Sampler）")
+        logger.info("=" * 70)
+
+        train_labels = train_dataset.y.numpy()
+        class_counts = np.bincount(train_labels)
+        total = len(train_labels)
+
+        # 计算每个样本的采样权重（逆频率）
+        sample_weights = np.zeros(total)
+        for class_id, count in enumerate(class_counts):
+            sample_weights[train_labels == class_id] = 1.0 / count
+
+        sample_weights = sample_weights / sample_weights.sum()  # 归一化
+
+        train_sampler = WeightedRandomSampler(
+            weights=sample_weights,
+            num_samples=len(sample_weights),
+            replacement=True  # 允许重复采样
+        )
+
+        logger.info(f"  策略: {config['dataloader']['balance_sampler']['strategy']}")
+        logger.info(f"  样本权重统计:")
+        for i, count in enumerate(class_counts):
+            avg_weight = sample_weights[train_labels == i].mean()
+            logger.info(f"    Class {i}: 平均权重={avg_weight:.6f} "
+                       f"(样本数={count:,})")
+
+    # 创建 DataLoader
+    if train_sampler is not None:
+        # 使用采样器时不能同时 shuffle
+        train_loader = DataLoader(train_dataset, sampler=train_sampler, **dataloader_kwargs)
+        logger.info("  ✅ 训练集使用平衡采样器（每个 batch 类别更均衡）")
+    else:
+        train_loader = DataLoader(train_dataset, shuffle=True, **dataloader_kwargs)
+
     val_loader = DataLoader(val_dataset, shuffle=False, **dataloader_kwargs)
     test_loader = DataLoader(test_dataset, shuffle=False, **dataloader_kwargs)
 
@@ -873,21 +916,55 @@ def main():
 
     # ========== 损失函数（类别权重） ==========
     class_weights = None
-    if config['loss']['class_weights'] == 'auto':
-        # 自动计算逆频率权重
+    class_weight_mode = config['loss']['class_weights']
+
+    if class_weight_mode and class_weight_mode != 'none':
+        # 获取类别分布
         train_labels = train_dataset.y.numpy()
         class_counts = np.bincount(train_labels)
         total = len(train_labels)
+        epsilon = config['labels']['weight_calculation']['epsilon']
 
-        epsilon = config['labels']['weight_calculation']['epsilon']  # 从配置读取
-        weights = total / (len(class_counts) * class_counts + epsilon)
+        # 根据模式计算权重
+        if class_weight_mode == 'auto':
+            # 方法 1：逆频率权重（标准方法）
+            weights = total / (len(class_counts) * class_counts + epsilon)
+            logger.info(f"\n类别权重模式: 逆频率 (Inverse Frequency)")
+
+        elif class_weight_mode == 'auto_sqrt':
+            # 方法 2：平方根逆频率（更温和的再平衡）
+            weights = np.sqrt(total / class_counts)
+            logger.info(f"\n类别权重模式: 平方根逆频率 (Square Root Inverse Frequency)")
+
+        elif class_weight_mode == 'effective_number':
+            # 方法 3：Effective Number（针对长尾分布）
+            beta = config['loss'].get('effective_number_beta', 0.999)
+            effective_num = 1.0 - np.power(beta, class_counts)
+            weights = (1.0 - beta) / (effective_num + epsilon)
+            logger.info(f"\n类别权重模式: Effective Number (beta={beta})")
+
+        elif class_weight_mode == 'manual':
+            # 方法 4：手动指定权重
+            weights = np.array(config['loss']['manual_weights'])
+            logger.info(f"\n类别权重模式: 手动指定 (Manual)")
+
+        else:
+            raise ValueError(f"未知的类别权重模式: {class_weight_mode}")
 
         # 归一化权重（如果配置启用）
         if config['labels']['weight_calculation']['normalize']:
             weights = weights / weights.mean()
+            logger.info("  权重已归一化（均值→1.0）")
+
+        # 打印详细权重信息
+        logger.info(f"  类别分布:")
+        for i, count in enumerate(class_counts):
+            pct = 100 * count / total
+            logger.info(f"    Class {i}: {count:,} ({pct:.2f}%) → 权重={weights[i]:.4f}")
+
+        logger.info(f"  权重比 (0:1:2) = {weights[0]:.2f} : {weights[1]:.2f} : {weights[2]:.2f}")
 
         class_weights = torch.FloatTensor(weights).to(device)
-        logger.info(f"\n类别权重（自动）: {weights}")
 
     # ========== 优化器 ==========
     if config['optim']['name'] == 'adamw':
@@ -958,7 +1035,7 @@ def main():
             logger.info("=" * 70)
 
             # PyTorch 2.6 安全加载：允许 ruamel.yaml 的类型
-            with torch.serialization.safe_globals([ScalarFloat, DoubleQuotedScalarString]):
+            with torch.serialization.safe_globals([ScalarFloat, ScalarInt, DoubleQuotedScalarString]):
                 checkpoint = torch.load(checkpoint_path, map_location=device, weights_only=True)
 
             # 載入模型權重
@@ -1085,7 +1162,7 @@ def main():
     best_model_path = os.path.join(output_dir, 'deeplob_v5_best.pth')
 
     # PyTorch 2.6 安全加载：允许 ruamel.yaml 的类型
-    with torch.serialization.safe_globals([ScalarFloat, DoubleQuotedScalarString]):
+    with torch.serialization.safe_globals([ScalarFloat, ScalarInt, DoubleQuotedScalarString]):
         checkpoint = torch.load(best_model_path, map_location=device, weights_only=True)
 
     model.load_state_dict(checkpoint['model_state_dict'])

@@ -2,6 +2,7 @@ conda activate deeplob-pro
 
 ##取資料
 python scripts/extract_tw_stock_data_v5.py
+python scripts/extract_tw_stock_data_v5.py --output-dir ./data/processed_v5_balanced --config configs/config_pro_v5_balanced_optimal.yaml
 
 # 基础训练（使用默认配置）
 python scripts/train_deeplob_v5.py --config configs/train_v5.yaml
