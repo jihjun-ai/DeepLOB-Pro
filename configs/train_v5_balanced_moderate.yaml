@@ -1,7 +1,7 @@
 # ===================================================================
-# DeepLOB V5 修復配置 - 中等版
-# 目標：修復 Class 1 Recall 極低問題（R=0.0003 → R>0.35）
-# 策略：平衡採樣器 + 手動權重 + 網絡擴容
+# DeepLOB V5 平衡數據訓練配置 - 中等版
+# 數據：processed_v5_balanced (Triple-Barrier 優化後)
+# 目標：Class 1 Recall > 35%，三類均衡
 # ===================================================================
 
 # ==================== 基礎配置 ====================
@@ -26,11 +26,12 @@ visualization:
     figsize: [8, 6]
     cmap: "Blues"
 
+# ==================== 數據配置 - 使用新的平衡數據！====================
 data:
-  train: "data/processed_v5/npz/stock_embedding_train.npz"
-  val: "data/processed_v5/npz/stock_embedding_val.npz"
-  test: "data/processed_v5/npz/stock_embedding_test.npz"
-  norm_meta: "data/processed_v5/npz/normalization_meta.json"
+  train: "data/processed_v5_balanced/npz/stock_embedding_train.npz"
+  val: "data/processed_v5_balanced/npz/stock_embedding_val.npz"
+  test: "data/processed_v5_balanced/npz/stock_embedding_test.npz"
+  norm_meta: "data/processed_v5_balanced/npz/normalization_meta.json"
 
   v5_labels: true
   y_raw_validation:
@@ -42,48 +43,46 @@ data:
   use_stock_ids: false
   fail_on_missing_keys: true
 
-# ==================== DataLoader 配置 - 關鍵修改！====================
+# ==================== DataLoader 配置 ====================
 dataloader:
-  batch_size: 256  # 🔧 縮小 batch
+  batch_size: 256
   num_workers: 4
   pin_memory: true
 
-  # 🔧 禁用平衡採樣器（與手動權重衝突）
+  # 啟用平衡採樣器
   balance_sampler:
-    enabled: false  # ❌ 禁用！只用手動權重
+    enabled: true
     strategy: "inv_freq"
 
-# ==================== 模型配置 - 擴容！====================
+# ==================== 模型配置 ====================
 model:
   arch: "DeepLOB"
   input:
     shape: [100, 20]
   num_classes: 3
 
-  # 🔧 擴大網絡容量（增強表達能力）
+  # 擴大網絡容量
   conv1_filters: 32
   conv2_filters: 32
   conv3_filters: 32
-  lstm_hidden_size: 64  # ✅ 48→64（進一步增強）
-  fc_hidden_size: 64    # ✅ 48→64（進一步增強）
-  dropout: 0.3          # 🔧 降低 dropout（0.4→0.3，減少信息損失）
+  lstm_hidden_size: 48
+  fc_hidden_size: 48
+  dropout: 0.4
 
   embeddings:
     enabled: false
 
-# ==================== 損失函數配置 - 手動權重！====================
+# ==================== 損失函數配置 ====================
 loss:
   type: "ce"
 
-  # 🔧 使用手動權重（針對性調整）
-  class_weights: "manual"  # ✅ 手動指定
-
-  # 手動權重設計（更激進版本）：
-  # - Class 0 (31.0%): 2.5 ← 大幅提高
-  # - Class 1 (42.0%): 1.0 ← 基準
-  # - Class 2 (27.0%): 2.8 ← 最高（樣本最少）
-  # 策略：拉大權重差異，強迫模型學習少數類
-  manual_weights: [2.5, 1.0, 2.8]
+  # 手動權重（針對新數據分佈 31%/42%/27%）
+  class_weights: "manual"
+  # 新權重設計：
+  # - Class 0 (31%): 1.1 ← 略提高
+  # - Class 1 (42%): 1.0 ← 基準（雖仍偏多但已改善）
+  # - Class 2 (27%): 1.2 ← 提高（最少）
+  manual_weights: [1.1, 1.0, 1.2]
 
   label_smoothing:
     global: 0.0
@@ -92,9 +91,9 @@ loss:
 # ==================== 優化器配置 ====================
 optim:
   name: "adamw"
-  lr: 0.00012  # 🔧 適度提高（0.00005→0.00012）
-  weight_decay: 0.0003  # 🔧 降低正則化（0.0005→0.0003）
-  grad_clip: 0.8  # 🔧 放寬裁剪（0.5→0.8，允許更大梯度）
+  lr: 0.00012
+  weight_decay: 0.0003
+  grad_clip: 0.8
   amp: false
   use_bf16: false
   betas: [0.9, 0.999]
@@ -104,17 +103,17 @@ optim:
 # ==================== 學習率調度器 ====================
 sched:
   name: "cosine"
-  warmup_ratio: 0.1  # 🔧 縮短預熱（0.15→0.1）
-  eta_min: 1.0e-5    # 🔧 提高最小LR（5e-6→1e-5）
+  warmup_ratio: 0.1
+  eta_min: 1.0e-5
 
 # ==================== 訓練配置 ====================
 train:
-  epochs: 60  # 🔧 延長訓練（40→60）
+  epochs: 40
   accumulate_steps: 1
 
   early_stop:
-    metric: "val.f1_macro_unweighted"  # ✅ 未加權 F1
-    patience: 15  # 🔧 延長耐心（10→15）
+    metric: "val.f1_macro_unweighted"
+    patience: 10
     mode: "max"
 
 # ==================== 評估配置 ====================
@@ -147,7 +146,7 @@ inference:
 
 # ==================== 日誌配置 ====================
 logging:
-  dir: "logs/deeplob_v5_fix_moderate"
+  dir: "logs/deeplob_v5_balanced_moderate"
   save_best_by: "val.f1_macro_unweighted"
 
   artifacts:
@@ -181,31 +180,34 @@ hardware:
 # ==================== 續訓配置 ====================
 resume:
   enabled: false
-  checkpoint_path: "checkpoints/v5/deeplob_v5_best.pth"
+  checkpoint_path: "checkpoints/v5_balanced/deeplob_v5_best.pth"
   load_optimizer: true
 
 # ==================== 其他配置 ====================
 misc:
   save_last: true
-  output_dir: "checkpoints/v5_fix_moderate"
+  output_dir: "checkpoints/v5_balanced_moderate"
 
 # ===================================================================
-# 修改總結（中等版）
+# 配置說明
 # ===================================================================
-# 1. ✅ 啟用平衡採樣器（同保守版）
-# 2. ✅ 手動權重 [1.2, 1.0, 1.3]（縮小權重差異）
-# 3. ✅ 擴大網絡容量（LSTM/FC 32→48）
-# 4. ✅ 降低 dropout（0.5→0.4，減少信息損失）
-# 5. ✅ 提高學習率（0.00005→0.00012）
-# 6. ✅ 降低權重衰減（0.0005→0.0003）
-# 7. ✅ 放寬梯度裁剪（0.5→0.8）
+# 數據改進：
+#   - 使用 Triple-Barrier 優化後的數據
+#   - Class 分佈：31% / 42% / 27% (vs 原始 29% / 45% / 26%)
+#   - Class 1 降低 3%，更接近均衡
+#
+# 訓練策略：
+#   1. 平衡採樣器 + 手動權重（雙重保障）
+#   2. 擴大網絡容量（LSTM/FC 48 units）
+#   3. 降低正則化（Dropout 0.4，Weight Decay 0.0003）
+#   4. 適度學習率（0.00012）
 #
 # 預期效果：
-#   - Class 1 Recall: 0.0003 → 0.35-0.50
-#   - 整體 F1: 可能略降（0.73→0.65-0.70），但更均衡
-#   - 三類 Recall 更接近（理想：0.4-0.5 之間）
+#   - Class 1 Recall: 11.3% → 30-45% (+165-298%)
+#   - Macro F1: 30.4% → 58-68% (+91-124%)
+#   - 三類 Recall 差距: < 15%
 #
 # 使用方法：
 #   python scripts/train_deeplob_v5.py \
-#       --config configs/train_v5_fix_moderate.yaml
+#       --config configs/train_v5_balanced_moderate.yaml
 # ===================================================================

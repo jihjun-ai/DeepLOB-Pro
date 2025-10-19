@@ -9,6 +9,7 @@ python scripts/train_deeplob_v5.py --config configs/train_v5.yaml
 
 ###目前最好配置
 python scripts/train_deeplob_v5.py --config configs/train_v5_fix_moderate.yaml --data-dir ./data/processed_v5_balanced/npz --epochs 40
+python scripts/train_deeplob_v5.py --config configs/train_v5_fix_moderate.yaml --data-dir ./data/processed_v5_balanced/npz --epochs 60
 
 
 
@@ -30,7 +31,7 @@ python scripts/check_processed_data.py
 python scripts/train_deeplob_generic.py --config configs/deeplob_generic_config.yaml --epochs 30 --early-stop --test-after-train
 
 ## 分析deeplob 數據
-python scripts\monitor_deeplob.py
+python scripts\monitor_deeplob.py --log-dir logs/deeplob_v5_fix_moderate
 
 
 
