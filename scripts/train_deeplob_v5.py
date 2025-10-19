@@ -685,6 +685,10 @@ def main():
                        help='YAML 配置文件路径')
     parser.add_argument('--override', type=str, nargs='*',
                        help='覆盖配置项（格式: key.subkey=value）')
+    parser.add_argument('--data-dir', type=str, default=None,
+                       help='数据目录路径（覆盖配置文件中的路径）')
+    parser.add_argument('--epochs', type=int, default=None,
+                       help='训练轮数（覆盖配置文件中的设置）')
     args = parser.parse_args()
 
     # ========== 载入配置 ==========
@@ -714,6 +718,20 @@ def main():
                 d[keys[-1]] = value
 
             logger.info(f"  覆盖: {key} = {value}")
+
+    # 应用 --data-dir 参数
+    if args.data_dir:
+        data_dir = args.data_dir
+        config['data']['train'] = os.path.join(data_dir, 'stock_embedding_train.npz')
+        config['data']['val'] = os.path.join(data_dir, 'stock_embedding_val.npz')
+        config['data']['test'] = os.path.join(data_dir, 'stock_embedding_test.npz')
+        config['data']['norm_meta'] = os.path.join(data_dir, 'normalization_meta.json')
+        logger.info(f"  数据目录: {data_dir}")
+
+    # 应用 --epochs 参数
+    if args.epochs:
+        config['train']['epochs'] = args.epochs
+        logger.info(f"  训练轮数: {args.epochs}")
 
     # ========== 设置随机种子 ==========
     seed = config['run']['seed']

@@ -1,31 +1,48 @@
-import torch
-from ruamel.yaml.scalarfloat import ScalarFloat
-from ruamel.yaml.scalarint import ScalarInt
-from ruamel.yaml.scalarstring import DoubleQuotedScalarString
+import json
 
-configs = {
-    '保守版': 'checkpoints/v5_fix_conservative/deeplob_v5_best.pth',
-    '中等版': 'checkpoints/v5_fix_moderate/deeplob_v5_best.pth',
-    '激進版': 'checkpoints/v5_fix_aggressive/deeplob_v5_best.pth',
-}
+# 讀取新數據分佈
+with open('data/processed_v5_balanced/npz/normalization_meta.json', 'r', encoding='utf-8') as f:
+    meta = json.load(f)
+
+# 訓練集分佈
+train_dist = meta['data_split']['results']['train']['label_dist']
+total = sum(train_dist)
 
 print('=' * 80)
-print('三個修復配置的訓練結果比較')
+print('新數據分佈驗證 (config_pro_v5_balanced_optimal.yaml)')
 print('=' * 80)
+print()
+print('訓練集 (1,249,419 樣本):')
+print(f'  Class 0 (下跌): {train_dist[0]:>7,} ({train_dist[0]/total*100:5.2f}%)')
+print(f'  Class 1 (持平): {train_dist[1]:>7,} ({train_dist[1]/total*100:5.2f}%)')
+print(f'  Class 2 (上漲): {train_dist[2]:>7,} ({train_dist[2]/total*100:5.2f}%)')
+print(f'  總計:          {total:>7,}')
+print()
 
-for name, path in configs.items():
-    print(f'\n{name}:')
-    try:
-        with torch.serialization.safe_globals([ScalarFloat, ScalarInt, DoubleQuotedScalarString]):
-            ckpt = torch.load(path, map_location='cpu')
+# 與原始數據對比
+original = [367457, 562361, 319601]
+print('與原始數據對比 (config_pro_v5_ml_optimal.yaml):')
+print(f'  Class 0: {original[0]/sum(original)*100:5.2f}% → {train_dist[0]/total*100:5.2f}% (變化: {train_dist[0]/total*100 - original[0]/sum(original)*100:+5.2f}%)')
+print(f'  Class 1: {original[1]/sum(original)*100:5.2f}% → {train_dist[1]/total*100:5.2f}% (變化: {train_dist[1]/total*100 - original[1]/sum(original)*100:+5.2f}%)')
+print(f'  Class 2: {original[2]/sum(original)*100:5.2f}% → {train_dist[2]/total*100:5.2f}% (變化: {train_dist[2]/total*100 - original[2]/sum(original)*100:+5.2f}%)')
+print()
 
-        epoch = ckpt.get("epoch", "N/A")
-        val_weighted_f1 = ckpt.get("val_weighted_f1", None)
-        val_unweighted_acc = ckpt.get("val_unweighted_acc", None)
+# 目標達成度
+target = [31.5, 35.0, 33.5]
+print('目標達成度 (目標: 30-33% / 33-37% / 30-33%):')
+for i, name in enumerate(['Class 0', 'Class 1', 'Class 2']):
+    actual = train_dist[i]/total*100
+    deviation = abs(actual - target[i])
+    status = '✅' if deviation < 3.0 else '⚠️' if deviation < 5.0 else '❌'
+    print(f'  {name}: {actual:5.2f}% (目標 {target[i]:.1f}%, 偏差 {deviation:4.2f}%) {status}')
 
-        print(f'  Epoch: {epoch}')
-        print(f'  Val Weighted F1: {f"{val_weighted_f1:.4f}" if val_weighted_f1 is not None else "N/A"}')
-        print(f'  Val Unweighted Acc: {f"{val_unweighted_acc:.4f}" if val_unweighted_acc is not None else "N/A"}')
-        print(f'  Available keys: {list(ckpt.keys())[:10]}...')
-    except Exception as e:
-        print(f'  Error: {e}')
+# 總偏差
+total_deviation = sum(abs(train_dist[i]/total*100 - target[i]) for i in range(3))
+print()
+print(f'總偏差: {total_deviation:.2f}%')
+if total_deviation < 8.0:
+    print('評價: ✅ 優秀！非常接近目標分佈')
+elif total_deviation < 12.0:
+    print('評價: ✅ 良好，可接受範圍')
+else:
+    print('評價: ⚠️ 需要微調')
