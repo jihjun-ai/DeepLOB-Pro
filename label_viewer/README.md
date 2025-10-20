@@ -1,8 +1,8 @@
 # Label Viewer - 互動式訓練數據標籤查看器
 
-**版本**：v2.0 (開發中)
+**版本**：v2.0 MVP
 **技術棧**：Plotly + Dash + Python
-**狀態**：🚧 30% 完成（規劃 + 基礎建設完成）
+**狀態**：✅ MVP 完成 (可運行)
 **最後更新**：2025-10-20
 
 ---
@@ -28,13 +28,26 @@
 
 ---
 
-## 🚀 快速開始（開發完成後）
+## 🚀 快速開始
+
+### 方式一：使用啟動腳本（推薦）
+
+```bash
+# Windows
+cd label_viewer
+start_viewer.bat
+```
+
+### 方式二：手動啟動
 
 ```bash
 # 進入專案目錄
 cd label_viewer
 
-# 安裝依賴
+# 啟動 Conda 環境（可選）
+conda activate deeplob-pro
+
+# 安裝依賴（首次運行）
 pip install -r requirements.txt
 
 # 啟動應用
@@ -56,16 +69,16 @@ label_viewer/
 │
 ├── components/            # UI 組件模組
 │   ├── __init__.py
-│   ├── main_chart.py      # 主圖表（待開發）
+│   ├── main_chart.py      # 主圖表 ✅ 已完成
+│   ├── label_dist.py      # 標籤分布圖 ✅ 已完成
 │   ├── label_timeline.py  # 標籤時間軸（待開發）
-│   ├── label_dist.py      # 標籤分布圖（待開發）
 │   └── weight_dist.py     # 權重分布圖（待開發）
 │
 ├── utils/                 # 工具函數模組
 │   ├── __init__.py
 │   ├── config.py          # 配置管理 ✅ 已完成
 │   ├── price_builder.py   # 收盤價重建 ✅ 已完成
-│   └── data_loader.py     # 數據載入（待開發）
+│   └── data_loader.py     # 數據載入 ✅ 已完成
 │
 ├── assets/                # 靜態資源
 │   └── style.css          # CSS 樣式（待開發）
@@ -114,14 +127,14 @@ label_viewer/
 
 ## 🎯 開發狀態
 
-### 當前進度：30% 完成
+### 當前進度：70% 完成（MVP 可運行）
 
 ```
-整體進度: [████████░░░░░░░░░░░░░░░░░░░░] 30%
+整體進度: [████████████████░░░░░░░░] 70%
 
 規劃階段:  [████████████████████████] 100% ✅
 基礎建設:  [████████████████████████] 100% ✅
-MVP 開發:  [█████░░░░░░░░░░░░░░░░░░░]  20% 🚧
+MVP 開發:  [████████████████████████] 100% ✅
 進階功能:  [░░░░░░░░░░░░░░░░░░░░░░░░]   0% ⏳
 測試文檔:  [░░░░░░░░░░░░░░░░░░░░░░░░]   0% ⏳
 ```
@@ -149,18 +162,18 @@ MVP 開發:  [█████░░░░░░░░░░░░░░░░░
 - ✅ 未來：功能路線圖（`docs/roadmap/`）
 - ✅ 變更日誌（`docs/development/CHANGELOG.md`）
 
+**4. MVP 開發（100%）✅**
+- ✅ `utils/data_loader.py` - 數據載入與快取（300 行）
+- ✅ `components/main_chart.py` - 主圖表組件（400 行）
+- ✅ `components/label_dist.py` - 標籤分布圖（300 行）
+- ✅ `app.py` - Dash 主應用（400 行）
+- ✅ `start_viewer.bat` - Windows 啟動腳本
+
 **程式碼統計**：
-- 已完成：230 行（17%）
-- 預估總計：1,350 行
+- 已完成：~1,630 行（MVP 完成）
+- 待開發：~400 行（進階功能）
 
-### 待完成工作
-
-**階段一：MVP（70%）⏳**
-- ⏳ `utils/data_loader.py` - 數據載入與快取（30 分鐘）
-- ⏳ `components/main_chart.py` - 主圖表（40 分鐘）
-- ⏳ `components/label_dist.py` - 標籤分布圖（20 分鐘）
-- ⏳ `app.py` - Dash 應用 MVP 版本（30 分鐘）
-- ⏳ 測試基礎功能（15 分鐘）
+### 待完成工作（進階功能）
 
 **階段二：進階功能（0%）⏳**
 - ⏳ 數據集切換（train/val/test）
