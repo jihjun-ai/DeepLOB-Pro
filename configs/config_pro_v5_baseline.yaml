@@ -1,0 +1,50 @@
+# V5 Pro 基準配置（無震盪篩選）
+version: "5.0.0"
+description: "基準組 - 無震盪篩選，保留所有數據"
+
+# 波動率設定
+volatility:
+  method: 'ewma'  # 'ewma', 'garch'
+  halflife: 60    # EWMA 半衰期（bars）
+
+# Triple-Barrier 參數
+triple_barrier:
+  pt_multiplier: 2.0   # 止盈倍數（2倍波動率）
+  sl_multiplier: 2.0   # 止損倍數（2倍波動率）
+  max_holding: 50      # 最大持有期
+  min_return: 0.0002   # 最小報酬閾值（0.02%）
+
+# 樣本權重
+sample_weights:
+  enabled: true        # 是否啟用樣本權重
+  tau: 100.0           # 時間衰減參數
+  return_scaling: 10.0 # 報酬縮放係數
+  balance_classes: true # 類別平衡
+
+# 震盪篩選（關閉）
+intraday_volatility_filter:
+  enabled: false  # 不啟用篩選
+  min_range_pct: 0.0
+  max_range_pct: 1.0
+
+# 輸出設定
+output:
+  save_meta: true
+  save_weights: true
+  compression: 'compressed'
+
+# 資料處理參數
+data:
+  aggregation_factor: 10
+  seq_len: 100
+  alpha: 0.002
+  horizons: [1, 2, 3, 5, 10]
+  trading_start: 90000
+  trading_end: 133000
+
+# 資料切分
+split:
+  train_ratio: 0.7
+  val_ratio: 0.15
+  test_ratio: 0.15
+  seed: 42

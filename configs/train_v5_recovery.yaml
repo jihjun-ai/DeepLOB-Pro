@@ -1,0 +1,213 @@
+# ===================================================================
+# DeepLOB V5 恢復配置 - 基於調參歷史修復
+# 目標：修復過擬合 + 驗證損失爆炸問題
+# 參考：實驗 #4 失敗經驗 + 原始 v5 成功配置
+# ===================================================================
+
+# ==================== 基礎配置 ====================
+run:
+  seed: 42
+
+labels:
+  num_classes: 3
+  class_names: ["下跌", "持平", "上漲"]
+  class_names_en: ["down", "stationary", "up"]
+  class_ids: [0, 1, 2]
+  format: "v5"
+
+  weight_calculation:
+    epsilon: 1.0e-6
+    normalize: true
+
+visualization:
+  confusion_matrix:
+    normalize: true
+    dpi: 150
+    figsize: [8, 6]
+    cmap: "Blues"
+
+data:
+  train: "data/processed_v5_balanced/npz/stock_embedding_train.npz"
+  val: "data/processed_v5_balanced/npz/stock_embedding_val.npz"
+  test: "data/processed_v5_balanced/npz/stock_embedding_test.npz"
+  norm_meta: "data/processed_v5_balanced/npz/normalization_meta.json"
+
+  v5_labels: true
+  y_raw_validation:
+    enabled: true
+    expected_values: [-1, 0, 1]
+
+  use_sample_weights: false  # 🔧 關閉！權重異常 (max=539, Class1被壓制)
+  weights_normalize: "mean_to_1"
+  use_stock_ids: false
+  fail_on_missing_keys: true
+
+# ==================== DataLoader 配置 ====================
+dataloader:
+  batch_size: 512  # 🔧 增大 batch (256→512) - 穩定梯度
+  num_workers: 4
+  pin_memory: true
+
+  # 🔧 禁用平衡採樣器（與手動權重衝突）
+  balance_sampler:
+    enabled: false  # ❌ 只用手動權重
+    strategy: "inv_freq"
+
+# ==================== 模型配置 ====================
+model:
+  arch: "DeepLOB"
+  input:
+    shape: [100, 20]
+  num_classes: 3
+
+  # 🔧 降低容量對抗過擬合
+  conv1_filters: 32
+  conv2_filters: 32
+  conv3_filters: 32
+  lstm_hidden_size: 64  # 🔧 降低容量 (64→48) - 減少過擬合
+  fc_hidden_size: 64    # 🔧 降低容量 (64→48) - 減少過擬合
+  dropout: 0.6          # 🔧 增強正則化 (0.5→0.6) - 進一步防過擬合
+
+  embeddings:
+    enabled: false
+
+# ==================== 損失函數配置 ====================
+loss:
+  type: "ce"
+
+  # 🔧 使用自動權重（測試 v5 原始數據）
+  class_weights: "auto"  # 🔧 改用 auto（讓模型自動計算，適應v5數據）
+  # manual_weights: [2.5, 1.0, 2.8]  # 停用手動權重
+
+  label_smoothing:
+    global: 0.15      # 🔧 增強平滑 (0.1→0.15) - 減少過度自信
+    flat_bonus: 0.0
+
+# ==================== 優化器配置 ====================
+optim:
+  name: "adamw"
+  lr: 0.00008        # 🔧 降低學習率 (0.00012→0.00008) - 更穩定
+  weight_decay: 0.0005  # 🔧 增強正則化 (0.0003→0.0005)
+  grad_clip: 0.5     # 🔧 嚴格裁剪 (0.8→0.5) - 控制梯度爆炸
+  amp: false
+  use_bf16: false
+  betas: [0.9, 0.999]
+  eps: 1.0e-8
+  amsgrad: false
+
+# ==================== 學習率調度器 ====================
+sched:
+  name: "cosine"
+  warmup_ratio: 0.15  # 🔧 延長預熱 (0.1→0.15) - 更穩定啟動
+  eta_min: 5.0e-6     # 🔧 降低最小LR (1e-5→5e-6)
+
+# ==================== 訓練配置 ====================
+train:
+  epochs: 50         # 🔧 實用設定（足夠收斂，early stop 會自動控制）
+  accumulate_steps: 1
+
+  early_stop:
+    metric: "val.f1_macro_unweighted"
+    patience: 15     # 🔧 標準耐心（15 epochs 無改善則停止）
+    mode: "max"
+
+# ==================== 評估配置 ====================
+eval:
+  group_split:
+    by_stock: true
+
+  metrics:
+    unweighted: ["acc", "f1_macro", "per_class_pr_rc", "confusion"]
+    weighted: ["f1_macro", "loss"]
+
+  breakdowns: ["reasons", "t_hit_bucket", "ret_quantile", "stock"]
+  thit_buckets: [0, 5, 10, 20, 100]
+  ret_quantiles: [0.8, 0.9, 0.95]
+
+# ==================== 校準配置 ====================
+calibration:
+  enabled: true
+  type: "temperature"
+  opt_metric: "weighted_nll"
+  lr: 0.01
+  max_iter: 50
+
+# ==================== 推理配置 ====================
+inference:
+  decision: "argmax"
+  cost_matrix:
+    path: null
+  hold_threshold: 0.0
+
+# ==================== 日誌配置 ====================
+logging:
+  dir: "logs/deeplob_v5_recovery"
+  save_best_by: "val.f1_macro_unweighted"
+
+  artifacts:
+    - "model"
+    - "norm_meta"
+    - "label_mapping"
+    - "calibration"
+    - "cost_matrix"
+    - "metrics_json"
+    - "logs_csv"
+    - "confmat_png"
+
+  wandb:
+    enabled: false
+
+# ==================== 安全檢查 ====================
+safety_checks:
+  validate_label_set: true
+  validate_weights: true
+  validate_norm_meta: true
+  print_data_summary: true
+
+# ==================== 硬件配置 ====================
+hardware:
+  device: "cuda"
+  num_workers: 4
+  pin_memory: true
+  prefetch_factor: 2
+  persistent_workers: true
+
+# ==================== 續訓配置 ====================
+resume:
+  enabled: false
+  checkpoint_path: "checkpoints/v5_recovery/deeplob_v5_best.pth"
+  load_optimizer: true
+
+# ==================== 其他配置 ====================
+misc:
+  save_last: true
+  output_dir: "checkpoints/v5_recovery"
+
+# ===================================================================
+# 修改總結（恢復版）
+# ===================================================================
+# 🎯 目標：修復過擬合 + 驗證損失爆炸
+#
+# 關鍵調整：
+# 1. ✅ Batch size 256→512（穩定梯度）
+# 2. ✅ Dropout 0.3→0.5（強正則化）
+# 3. ✅ LR 0.00012→0.00008（降低學習率）
+# 4. ✅ Weight decay 0.0003→0.0005（增強L2）
+# 5. ✅ Grad clip 0.8→0.5（控制梯度爆炸）
+# 6. ✅ Label smoothing 0.0→0.1（防止過度自信）
+# 7. ✅ Warmup 0.1→0.15（更穩定啟動）
+# 8. ✅ 手動權重 [2.5, 1.0, 2.8]（更激進）
+# 9. ✅ Epochs 60→80, Patience 15→20（延長觀察期）
+#
+# 預期效果：
+#   - 驗證損失收斂（不再爆炸）
+#   - 訓練/驗證差距縮小至 <10%
+#   - 梯度穩定在 <5.0
+#   - 驗證 F1 > 50% (目標 > 65%)
+#
+# 使用方法：
+#   python scripts/train_deeplob_v5.py \
+#       --config configs/train_v5_recovery.yaml \
+#       --data-dir ./data/processed_v5_balanced/npz \
+#       --epochs 80
+# ===================================================================

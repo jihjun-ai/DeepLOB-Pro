@@ -1,0 +1,224 @@
+# ===================================================================
+# DeepLOB V5 修復配置 - 激進版
+# 目標：修復 Class 1 Recall 極低問題（R=0.0003 → R>0.50）
+# 策略：平衡採樣器 + 極端手動權重 + 大幅擴容 + 高學習率
+# 警告：可能導致整體準確率下降，但三類更均衡
+# ===================================================================
+
+# ==================== 基礎配置 ====================
+run:
+  seed: 42
+
+labels:
+  num_classes: 3
+  class_names: ["下跌", "持平", "上漲"]
+  class_names_en: ["down", "stationary", "up"]
+  class_ids: [0, 1, 2]
+  format: "v5"
+
+  weight_calculation:
+    epsilon: 1.0e-6
+    normalize: true
+
+visualization:
+  confusion_matrix:
+    normalize: true
+    dpi: 150
+    figsize: [8, 6]
+    cmap: "Blues"
+
+data:
+  train: "data/processed_v5/npz/stock_embedding_train.npz"
+  val: "data/processed_v5/npz/stock_embedding_val.npz"
+  test: "data/processed_v5/npz/stock_embedding_test.npz"
+  norm_meta: "data/processed_v5/npz/normalization_meta.json"
+
+  v5_labels: true
+  y_raw_validation:
+    enabled: true
+    expected_values: [-1, 0, 1]
+
+  use_sample_weights: true
+  weights_normalize: "mean_to_1"
+  use_stock_ids: false
+  fail_on_missing_keys: true
+
+# ==================== DataLoader 配置 - 激進！====================
+dataloader:
+  batch_size: 128  # 🔧 大幅縮小（256→128，最大化梯度多樣性）
+  num_workers: 4
+  pin_memory: true
+
+  # 🔧 啟用平衡採樣器
+  balance_sampler:
+    enabled: true
+    strategy: "inv_freq"
+
+# ==================== 模型配置 - 大幅擴容！====================
+model:
+  arch: "DeepLOB"
+  input:
+    shape: [100, 20]
+  num_classes: 3
+
+  # 🔧 大幅擴大網絡容量（32→64）
+  conv1_filters: 48  # ✅ 32→48（更強特徵提取）
+  conv2_filters: 48  # ✅ 32→48
+  conv3_filters: 48  # ✅ 32→48
+  lstm_hidden_size: 64  # ✅ 32→64（最強時序建模）
+  fc_hidden_size: 64    # ✅ 32→64（最強分類能力）
+  dropout: 0.3          # 🔧 大幅降低（0.5→0.3，最小化信息損失）
+
+  embeddings:
+    enabled: false
+
+# ==================== 損失函數配置 - 極端權重！====================
+loss:
+  type: "ce"
+
+  # 🔧 極端手動權重（幾乎均等，強迫模型學習所有類）
+  class_weights: "manual"
+
+  # 極端權重設計：
+  # - Class 0 (29.4%): 1.1 ← 略高
+  # - Class 1 (45.0%): 1.2 ← 反而提高！（強迫模型重視 Class 1）
+  # - Class 2 (25.6%): 1.3 ← 最高
+  # 策略：反向操作，給 Class 1 較高權重，強迫模型學習
+  manual_weights: [1.1, 1.2, 1.3]
+
+  label_smoothing:
+    global: 0.05  # 🔧 啟用輕微平滑（0→0.05，避免過度自信）
+    flat_bonus: 0.00
+
+# ==================== 優化器配置 - 激進！====================
+optim:
+  name: "adamw"
+  lr: 0.0003  # 🔧 大幅提高（0.00005→0.0003，6倍！）
+  weight_decay: 0.0001  # 🔧 降低正則化（0.0005→0.0001）
+  grad_clip: 1.5  # 🔧 大幅放寬（0.5→1.5，允許更大更新）
+  amp: false
+  use_bf16: false
+  betas: [0.9, 0.999]
+  eps: 1.0e-8
+  amsgrad: false
+
+# ==================== 學習率調度器 ====================
+sched:
+  name: "cosine"
+  warmup_ratio: 0.05  # 🔧 極短預熱（0.15→0.05）
+  eta_min: 3.0e-5     # 🔧 提高最小LR（5e-6→3e-5）
+
+# ==================== 訓練配置 ====================
+train:
+  epochs: 50  # 🔧 延長訓練（40→50，給模型更多時間）
+  accumulate_steps: 1
+
+  early_stop:
+    metric: "val.f1_macro_unweighted"
+    patience: 12  # 🔧 延長耐心（8→12）
+    mode: "max"
+
+# ==================== 評估配置 ====================
+eval:
+  group_split:
+    by_stock: true
+
+  metrics:
+    unweighted: ["acc", "f1_macro", "per_class_pr_rc", "confusion"]
+    weighted: ["f1_macro", "loss"]
+
+  breakdowns: ["reasons", "t_hit_bucket", "ret_quantile", "stock"]
+  thit_buckets: [0, 5, 10, 20, 100]
+  ret_quantiles: [0.8, 0.9, 0.95]
+
+# ==================== 校準配置 ====================
+calibration:
+  enabled: true
+  type: "temperature"
+  opt_metric: "weighted_nll"
+  lr: 0.01
+  max_iter: 50
+
+# ==================== 推理配置 ====================
+inference:
+  decision: "argmax"
+  cost_matrix:
+    path: null
+  hold_threshold: 0.0
+
+# ==================== 日誌配置 ====================
+logging:
+  dir: "logs/deeplob_v5_fix_aggressive"
+  save_best_by: "val.f1_macro_unweighted"
+
+  artifacts:
+    - "model"
+    - "norm_meta"
+    - "label_mapping"
+    - "calibration"
+    - "cost_matrix"
+    - "metrics_json"
+    - "logs_csv"
+    - "confmat_png"
+
+  wandb:
+    enabled: false
+
+# ==================== 安全檢查 ====================
+safety_checks:
+  validate_label_set: true
+  validate_weights: true
+  validate_norm_meta: true
+  print_data_summary: true
+
+# ==================== 硬件配置 ====================
+hardware:
+  device: "cuda"
+  num_workers: 4
+  pin_memory: true
+  prefetch_factor: 2
+  persistent_workers: true
+
+# ==================== 續訓配置 ====================
+resume:
+  enabled: false
+  checkpoint_path: "checkpoints/v5/deeplob_v5_best.pth"
+  load_optimizer: true
+
+# ==================== 其他配置 ====================
+misc:
+  save_last: true
+  output_dir: "checkpoints/v5_fix_aggressive"
+
+# ===================================================================
+# 修改總結（激進版）⚠️
+# ===================================================================
+# 1. ✅ 啟用平衡採樣器
+# 2. ✅ 極端手動權重 [1.1, 1.2, 1.3]（幾乎均等，甚至偏向 Class 1）
+# 3. ✅ 大幅擴容（Conv 32→48，LSTM/FC 32→64）
+# 4. ✅ 大幅降低 dropout（0.5→0.3）
+# 5. ✅ 學習率 6 倍提升（0.00005→0.0003）
+# 6. ✅ 大幅降低權重衰減（0.0005→0.0001）
+# 7. ✅ 大幅放寬梯度裁剪（0.5→1.5）
+# 8. ✅ 延長訓練（40→50 epochs）
+# 9. ✅ 啟用輕微標籤平滑（0→0.05）
+# 10. ✅ 縮小 batch（256→128）
+#
+# ⚠️ 警告：
+#   - 可能導致訓練不穩定（學習率太高）
+#   - 可能過擬合（網絡容量大 + dropout 低）
+#   - 整體準確率可能下降（0.73→0.60-0.65）
+#   - 但三類 Recall 應該更均衡！
+#
+# 預期效果：
+#   - Class 0 Recall: 0.40-0.60
+#   - Class 1 Recall: 0.50-0.70 ← 大幅提升！
+#   - Class 2 Recall: 0.40-0.60
+#   - 整體 F1: 0.60-0.65（可能降低，但更公平）
+#
+# 使用方法：
+#   python scripts/train_deeplob_v5.py \
+#       --config configs/train_v5_fix_aggressive.yaml
+#
+# 建議：先試保守版和中等版，如果效果不佳再用激進版
+# ===================================================================

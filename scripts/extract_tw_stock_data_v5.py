@@ -143,7 +143,9 @@ global_stats = {
     "cleaned_events": 0,
     "aggregated_points": 0,
     "valid_windows": 0,
-    "tb_success": 0
+    "tb_success": 0,
+    "volatility_stats": [],  # 新增：儲存每個 symbol-day 的震盪統計
+    "volatility_filtered": 0  # 新增：被震盪篩選過濾的樣本數
 }
 
 
@@ -417,6 +419,12 @@ def parse_args():
         default=True,
         help="输出 70/15/15 的 .npz 文件"
     )
+    p.add_argument(
+        "--stats-only",
+        action="store_true",
+        default=False,
+        help="只产生震盪统计报告，不生成训练数据（快速模式）"
+    )
     return p.parse_args()
 
 
@@ -582,6 +590,172 @@ def aggregate_chunks_of_10(seq: List[Tuple[int, Dict[str,Any]]]) -> Tuple[np.nda
 
     global_stats["aggregated_points"] += len(feats)
     return np.stack(feats, axis=0), np.array(mids, dtype=np.float64)
+
+
+def calculate_intraday_volatility(mids: np.ndarray, date: str, symbol: str) -> Optional[Dict[str, Any]]:
+    """
+    計算當日震盪統計
+
+    Args:
+        mids: 中間價序列
+        date: 交易日期
+        symbol: 股票代碼
+
+    Returns:
+        震盪統計字典，包含：
+        - range_pct: 震盪幅度 (最高-最低)/開盤
+        - high: 最高價
+        - low: 最低價
+        - open: 開盤價
+        - close: 收盤價
+        - return_pct: 漲跌幅
+        - n_points: 數據點數
+    """
+    if mids.size == 0:
+        return None
+
+    open_price = mids[0]
+    close_price = mids[-1]
+    high_price = mids.max()
+    low_price = mids.min()
+
+    # 避免除以零
+    if open_price <= 0:
+        return None
+
+    # 計算震盪幅度（相對於開盤價）
+    range_pct = (high_price - low_price) / open_price
+
+    # 計算漲跌幅
+    return_pct = (close_price - open_price) / open_price
+
+    return {
+        "date": date,
+        "symbol": symbol,
+        "range_pct": float(range_pct),
+        "return_pct": float(return_pct),
+        "high": float(high_price),
+        "low": float(low_price),
+        "open": float(open_price),
+        "close": float(close_price),
+        "n_points": len(mids)
+    }
+
+
+def generate_volatility_report(vol_stats: List[Dict[str, Any]], out_dir: str):
+    """
+    生成震盪統計報告（CSV + JSON + 控制台輸出）
+
+    Args:
+        vol_stats: 震盪統計列表
+        out_dir: 輸出目錄
+    """
+    if not vol_stats:
+        logging.warning("沒有震盪統計資料可產生報告")
+        return
+
+    df = pd.DataFrame(vol_stats)
+
+    # 計算統計摘要
+    range_values = df['range_pct'].values * 100  # 轉為百分比
+    return_values = df['return_pct'].values * 100
+
+    # 分位數統計
+    percentiles = [10, 25, 50, 75, 90, 95, 99]
+    range_percentiles = np.percentile(range_values, percentiles)
+    return_percentiles = np.percentile(return_values, percentiles)
+
+    # 閾值統計
+    thresholds = [0.5, 1.0, 1.5, 2.0, 2.5, 3.0, 4.0, 5.0]
+    threshold_stats = []
+
+    for threshold in thresholds:
+        count = (range_values >= threshold).sum()
+        pct = count / len(range_values) * 100
+        threshold_stats.append({
+            'threshold_pct': float(threshold),
+            'count': int(count),
+            'percentage': float(pct)
+        })
+
+    # 控制台輸出
+    logging.info(f"\n{'='*60}")
+    logging.info("📊 震盪幅度統計報告（Intraday Range Analysis）")
+    logging.info(f"{'='*60}")
+    logging.info(f"總樣本數: {len(df):,} 個 symbol-day 組合")
+    logging.info(f"股票數: {df['symbol'].nunique()} 檔")
+    logging.info(f"交易日數: {df['date'].nunique()} 天")
+    logging.info(f"\n震盪幅度 (Range %) 分布:")
+    logging.info(f"  最小值: {range_values.min():.2f}%")
+    logging.info(f"  最大值: {range_values.max():.2f}%")
+    logging.info(f"  平均值: {range_values.mean():.2f}%")
+    logging.info(f"  中位數: {np.median(range_values):.2f}%")
+    logging.info(f"  標準差: {range_values.std():.2f}%")
+
+    logging.info(f"\n分位數分布:")
+    for p, val in zip(percentiles, range_percentiles):
+        logging.info(f"  P{p:2d}: {val:6.2f}%")
+
+    logging.info(f"\n閾值篩選統計（震盪 ≥ X% 的樣本數）:")
+    logging.info(f"{'閾值':>6} | {'樣本數':>8} | {'佔比':>6}")
+    logging.info(f"{'-'*6}-+-{'-'*8}-+-{'-'*6}")
+    for ts in threshold_stats:
+        logging.info(f"{ts['threshold_pct']:5.1f}% | {ts['count']:8,} | {ts['percentage']:5.1f}%")
+
+    logging.info(f"\n漲跌幅 (Return %) 分布:")
+    logging.info(f"  平均值: {return_values.mean():.2f}%")
+    logging.info(f"  中位數: {np.median(return_values):.2f}%")
+    logging.info(f"  標準差: {return_values.std():.2f}%")
+
+    # 找出極端案例
+    top_volatile = df.nlargest(10, 'range_pct')[['date', 'symbol', 'range_pct', 'return_pct']]
+    logging.info(f"\n震盪最大的 10 個樣本:")
+    for idx, row in top_volatile.iterrows():
+        logging.info(f"  {row['symbol']} @ {row['date']}: 震盪 {row['range_pct']*100:.2f}%, 報酬 {row['return_pct']*100:.2f}%")
+
+    logging.info(f"{'='*60}\n")
+
+    # 保存 CSV
+    csv_path = os.path.join(out_dir, "volatility_stats.csv")
+    df.to_csv(csv_path, index=False, encoding='utf-8-sig')
+    logging.info(f"✅ 震盪統計已保存: {csv_path}")
+
+    # 保存 JSON 摘要
+    summary = {
+        "total_samples": int(len(df)),
+        "n_stocks": int(df['symbol'].nunique()),
+        "n_dates": int(df['date'].nunique()),
+        "range_pct": {
+            "min": float(range_values.min()),
+            "max": float(range_values.max()),
+            "mean": float(range_values.mean()),
+            "median": float(np.median(range_values)),
+            "std": float(range_values.std()),
+            "percentiles": {f"P{p}": float(v) for p, v in zip(percentiles, range_percentiles)}
+        },
+        "return_pct": {
+            "mean": float(return_values.mean()),
+            "median": float(np.median(return_values)),
+            "std": float(return_values.std()),
+            "percentiles": {f"P{p}": float(v) for p, v in zip(percentiles, return_percentiles)}
+        },
+        "threshold_stats": threshold_stats,
+        "top_10_volatile": [
+            {
+                "symbol": str(row['symbol']),
+                "date": str(row['date']),
+                "range_pct": float(row['range_pct'] * 100),
+                "return_pct": float(row['return_pct'] * 100)
+            }
+            for _, row in top_volatile.iterrows()
+        ]
+    }
+
+    json_path = os.path.join(out_dir, "volatility_summary.json")
+    with open(json_path, "w", encoding="utf-8") as f:
+        json.dump(summary, f, ensure_ascii=False, indent=2)
+
+    logging.info(f"✅ 震盪摘要已保存: {json_path}\n")
 
 
 def zscore_fit(X: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
@@ -1025,6 +1199,28 @@ def main():
                 if Xp.shape[0] == 0:
                     continue
 
+                # V5: 計算並保存震盪統計
+                vol_stats = calculate_intraday_volatility(mids, day, sym)
+                if vol_stats is not None:
+                    global_stats["volatility_stats"].append(vol_stats)
+
+                    # V5: 震盪篩選（如果啟用）
+                    if config.get('intraday_volatility_filter', {}).get('enabled', False):
+                        min_range = config['intraday_volatility_filter'].get('min_range_pct', 0.0)
+                        max_range = config['intraday_volatility_filter'].get('max_range_pct', 1.0)
+
+                        range_pct = vol_stats['range_pct']
+
+                        if range_pct < min_range:
+                            logging.debug(f"  {sym} @ {day}: 震盪過小 ({range_pct*100:.2f}% < {min_range*100:.1f}%)，跳過")
+                            global_stats["volatility_filtered"] += 1
+                            continue
+
+                        if range_pct > max_range:
+                            logging.debug(f"  {sym} @ {day}: 震盪過大 ({range_pct*100:.2f}% > {max_range*100:.1f}%)，跳過")
+                            global_stats["volatility_filtered"] += 1
+                            continue
+
                 # V5: 保存 mids（用于后续标签生成）
                 per_day_symbol_points.append((day, sym, Xp, mids))
 
@@ -1035,8 +1231,18 @@ def main():
 
         logging.info(f"共处理 {len(per_day_symbol_points)} 个 symbol-day 组合")
 
+        # 產生震盪統計報告
+        if global_stats["volatility_stats"]:
+            generate_volatility_report(global_stats["volatility_stats"], out_dir)
+
         # 产出 70/15/15 的 .npz（V5 滑窗流程）
-        if args.make_npz:
+        if args.stats_only:
+            logging.info("\n" + "="*60)
+            logging.info("⚡ 快速模式：已完成震盪統計，跳過訓練數據生成")
+            logging.info("="*60)
+            logging.info("如需生成訓練數據，請移除 --stats-only 參數")
+            logging.info("="*60 + "\n")
+        elif args.make_npz:
             logging.info("开始产生 V5 .npz 档案")
             sliding_windows_v5(
                 per_day_symbol_points,
@@ -1045,14 +1251,19 @@ def main():
             )
 
         logging.info(f"\n{'='*60}")
-        logging.info(f"[完成] V5 转换成功，输出资料夹: {out_dir}")
+        if args.stats_only:
+            logging.info(f"[完成] 震盪統計成功，輸出資料夾: {out_dir}")
+        else:
+            logging.info(f"[完成] V5 转换成功，输出资料夹: {out_dir}")
         logging.info(f"{'='*60}")
         logging.info(f"统计资料:")
         logging.info(f"  原始事件数: {global_stats['total_raw_events']:,}")
         logging.info(f"  清洗后: {global_stats['cleaned_events']:,}")
         logging.info(f"  聚合后时间点: {global_stats['aggregated_points']:,}")
-        logging.info(f"  有效窗口: {global_stats['valid_windows']:,}")
-        logging.info(f"  Triple-Barrier 成功: {global_stats['tb_success']:,}")
+        if not args.stats_only:
+            logging.info(f"  有效窗口: {global_stats['valid_windows']:,}")
+            logging.info(f"  Triple-Barrier 成功: {global_stats['tb_success']:,}")
+        logging.info(f"  震盪統計樣本: {len(global_stats['volatility_stats']):,}")
         logging.info(f"{'='*60}\n")
 
         return 0

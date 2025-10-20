@@ -52,6 +52,7 @@ from ruamel.yaml.scalarstring import DoubleQuotedScalarString
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from src.models.deeplob import DeepLOB
+from src.models.deeplob_improved import DeepLOBImproved  # 新增：改進版模型
 from src.utils.yaml_manager import YAMLManager
 
 # ===================================================================
@@ -112,6 +113,12 @@ class LOBV5Dataset(Dataset):
             # 验证权重
             if config['safety_checks']['validate_weights']:
                 self._validate_weights()
+
+            # ✨ 可選裁剪（避免極端值）
+            if 'weights_clip' in config['data'] and config['data']['weights_clip']:
+                lo, hi = config['data']['weights_clip']
+                self.weights.clamp_(min=float(lo), max=float(hi))
+                logger.info(f"  权重已裁剪到 [{lo}, {hi}]")
 
             # 归一化权重
             if config['data']['weights_normalize'] == "mean_to_1":
@@ -854,6 +861,16 @@ def main():
         logger.info("创建平衡采样器（Balanced Sampler）")
         logger.info("=" * 70)
 
+        # ===== 守門邏輯：避免三重加權 =====
+        if (config['loss']['class_weights'] and
+            config['loss']['class_weights'] not in ['none', None, False]) or \
+           config['data']['use_sample_weights']:
+            logger.warning("⚠️  已啟用 Balanced Sampler，將關閉 class_weights 與 sample_weights")
+            logger.warning("    → 採樣器已經在 DataLoader 層面平衡了類別")
+            logger.warning("    → 不需要再在 Loss 中加權，避免三重放大")
+            config['loss']['class_weights'] = 'none'
+            config['data']['use_sample_weights'] = False
+
         train_labels = train_dataset.y.numpy()
         class_counts = np.bincount(train_labels)
         total = len(train_labels)
@@ -894,20 +911,40 @@ def main():
     logger.info("创建模型")
     logger.info("=" * 70)
 
-    model = DeepLOB(
-        input_shape=tuple(config['model']['input']['shape']),
-        num_classes=config['model']['num_classes'],
-        conv1_filters=config['model']['conv1_filters'],
-        conv2_filters=config['model']['conv2_filters'],
-        conv3_filters=config['model']['conv3_filters'],
-        lstm_hidden_size=config['model']['lstm_hidden_size'],
-        fc_hidden_size=config['model']['fc_hidden_size'],
-        dropout=config['model']['dropout']
-    ).to(device)
+    # 檢查模型類型（支持原版和改進版）
+    model_type = config['model'].get('type', 'deeplob')  # 默認原版
+
+    if model_type == 'deeplob_improved':
+        logger.info("使用改進版 DeepLOB (LayerNorm + Attention Pooling)")
+        model = DeepLOBImproved(
+            num_classes=config['model']['num_classes'],
+            conv_filters=config['model']['conv1_filters'],  # 使用相同的濾波器數
+            lstm_hidden=config['model']['lstm_hidden_size'],
+            fc_hidden=config['model']['fc_hidden_size'],
+            dropout=config['model']['dropout'],
+            use_layer_norm=config['model'].get('use_layer_norm', True),
+            use_attention=config['model'].get('use_attention', True),
+            input_shape=tuple(config['model']['input']['shape'])
+        ).to(device)
+    elif model_type == 'deeplob':
+        logger.info("使用原版 DeepLOB")
+        model = DeepLOB(
+            input_shape=tuple(config['model']['input']['shape']),
+            num_classes=config['model']['num_classes'],
+            conv1_filters=config['model']['conv1_filters'],
+            conv2_filters=config['model']['conv2_filters'],
+            conv3_filters=config['model']['conv3_filters'],
+            lstm_hidden_size=config['model']['lstm_hidden_size'],
+            fc_hidden_size=config['model']['fc_hidden_size'],
+            dropout=config['model']['dropout']
+        ).to(device)
+    else:
+        raise ValueError(f"未知的模型類型: {model_type}，支持 'deeplob' 或 'deeplob_improved'")
 
     # 统计参数
     total_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
-    logger.info(f"模型参数量: {total_params:,}")
+    logger.info(f"模型參數量: {total_params:,}")
+    logger.info(f"模型類型: {model_type}")
 
     # ========== RTX 5090 專屬優化 ==========
     if torch.cuda.is_available():
@@ -915,11 +952,14 @@ def main():
         logger.info("RTX 5090 專屬優化")
         logger.info("=" * 70)
 
-        # 1. 啟用 TF32 (Ampere 架構以上) - 使用新 API
-        # 新版 PyTorch 2.6+ 推荐的设置方式
-        torch.backends.cuda.matmul.fp32_precision = 'tf32'  # 矩阵乘法使用 TF32
-        torch.backends.cudnn.conv.fp32_precision = 'tf32'   # 卷积使用 TF32
-        logger.info("✅ TF32 加速已啟用（矩陣運算 +20% 性能）- 使用新版 API")
+        # 1. 啟用 TF32 (Ampere 架構以上) - 正確的 API
+        torch.backends.cuda.matmul.allow_tf32 = True
+        torch.backends.cudnn.allow_tf32 = True
+        try:
+            torch.set_float32_matmul_precision("high")  # PyTorch 2.0+
+        except AttributeError:
+            pass  # PyTorch < 2.0 沒有這個 API
+        logger.info("✅ TF32 已啟用（allow_tf32=True + 高精度 matmul）")
 
         # 2. 啟用 cudnn benchmark（固定輸入大小）
         torch.backends.cudnn.benchmark = True
@@ -998,27 +1038,50 @@ def main():
     logger.info(f"  lr: {config['optim']['lr']}")
     logger.info(f"  weight_decay: {config['optim']['weight_decay']}")
 
-    # ========== 学习率调度器 ==========
+    # ========== 学习率调度器（正確的 Warmup 實作） ==========
     num_epochs = config['train']['epochs']
     warmup_epochs = int(num_epochs * config['sched']['warmup_ratio'])
 
     if config['sched']['name'] == 'cosine':
-        scheduler = optim.lr_scheduler.CosineAnnealingLR(
-            optimizer,
-            T_max=num_epochs - warmup_epochs,
-            eta_min=config['sched']['eta_min']  # 从配置读取
-        )
+        if warmup_epochs > 0:
+            # ✅ 真正的 Warmup: 線性增長 → Cosine 衰減
+            warmup_scheduler = optim.lr_scheduler.LinearLR(
+                optimizer,
+                start_factor=max(1e-3, config['sched'].get('warmup_start_factor', 0.01)),
+                end_factor=1.0,
+                total_iters=warmup_epochs
+            )
+            cosine_scheduler = optim.lr_scheduler.CosineAnnealingLR(
+                optimizer,
+                T_max=num_epochs - warmup_epochs,
+                eta_min=config['sched']['eta_min']
+            )
+            scheduler = optim.lr_scheduler.SequentialLR(
+                optimizer,
+                schedulers=[warmup_scheduler, cosine_scheduler],
+                milestones=[warmup_epochs]
+            )
+            logger.info(f"学习率调度器: Warmup ({warmup_epochs} epochs) + Cosine")
+            logger.info(f"  warmup_start_factor: {config['sched'].get('warmup_start_factor', 0.01)}")
+        else:
+            # 無 Warmup，直接 Cosine
+            scheduler = optim.lr_scheduler.CosineAnnealingLR(
+                optimizer,
+                T_max=num_epochs,
+                eta_min=config['sched']['eta_min']
+            )
+            logger.info(f"学习率调度器: Cosine (無 Warmup)")
     else:
         scheduler = None
+        logger.info(f"学习率调度器: None")
 
-    logger.info(f"学习率调度器: {config['sched']['name']}")
-    logger.info(f"  warmup_epochs: {warmup_epochs}")
-    logger.info(f"  eta_min: {config['sched'].get('eta_min', 'N/A')}")
+    if scheduler is not None:
+        logger.info(f"  eta_min: {config['sched'].get('eta_min', 'N/A')}")
 
     # ========== 混合精度训练 ==========
     scaler = None
     if config['optim']['amp'] and device.type == 'cuda':
-        scaler = GradScaler('cuda')
+        scaler = GradScaler()  # 自動檢測設備
         use_bf16 = config['optim'].get('use_bf16', False)
         precision_type = "BF16 (bfloat16)" if use_bf16 else "FP16 (float16)"
         logger.info(f"混合精度训练 (AMP): 已启用 - 使用 {precision_type}")
@@ -1111,8 +1174,8 @@ def main():
         )):
             logger.info(f"      - Class {i}: P={p:.4f}, R={r:.4f}")
 
-        # ===== 学习率调整（warmup 后） =====
-        if epoch > warmup_epochs and scheduler is not None:
+        # ===== 学习率调整（每個 epoch 都調用） =====
+        if scheduler is not None:
             scheduler.step()
 
         current_lr = optimizer.param_groups[0]['lr']

@@ -3,6 +3,13 @@ conda activate deeplob-pro
 ##取資料
 python scripts/extract_tw_stock_data_v5.py
 python scripts/extract_tw_stock_data_v5.py --output-dir ./data/processed_v5_balanced --config configs/config_pro_v5_balanced_optimal.yaml
+##只統計不生成資料# 僅統計模式（待實作）
+python scripts/extract_tw_stock_data_v5.py --input-dir ./data/temp --output-dir ./data/volatility_only --config configs/config_pro_v5_balanced_optimal.yaml --stats-only  
+
+##檢查資料健康度
+python scripts/check_data_health_v5.py --data-dir ./data/processed_v5_filter2.0/npz --save-report --plot --verbose
+
+
 
 # 基础训练（使用默认配置）
 python scripts/train_deeplob_v5.py --config configs/train_v5.yaml
@@ -10,6 +17,17 @@ python scripts/train_deeplob_v5.py --config configs/train_v5.yaml
 ###目前最好配置
 python scripts/train_deeplob_v5.py --config configs/train_v5_fix_moderate.yaml --data-dir ./data/processed_v5_balanced/npz --epochs 40
 python scripts/train_deeplob_v5.py --config configs/train_v5_fix_moderate.yaml --data-dir ./data/processed_v5_balanced/npz --epochs 60
+python scripts/train_deeplob_v5.py --config configs/train_v5_recovery.yaml --data-dir ./data/processed_v5_balanced/npz  --epochs 50
+python scripts/train_deeplob_v5.py --config configs/train_v5_recovery.yaml --data-dir ./data/processed_v5/npz --epochs 50
+python scripts/train_deeplob_v5.py --config configs/train_v5_recovery.yaml --data-dir ./data/processed_v5_balanced/npz --epochs 50
+python scripts/train_deeplob_v5.py --config configs/train_v5_recovery_v6.yaml --data-dir ./data/processed_v5/npz --epochs 50
+python scripts/train_deeplob_v5.py --config configs/train_v5_recovery_v7.yaml --data-dir ./data/processed_v5_balanced/npz --epochs 50
+
+python scripts/train_deeplob_v5.py --config configs/train_v5_recovery.yaml --data-dir ./data/processed_v5_balanced/npz --epochs 10
+
+##篩選 2% 震盪資料
+python scripts/extract_tw_stock_data_v5.py --config configs/config_pro_v5_filter2.0.yaml --output-dir ./data/processed_v5_filter2.0
+```
 
 
 
@@ -31,7 +49,7 @@ python scripts/check_processed_data.py
 python scripts/train_deeplob_generic.py --config configs/deeplob_generic_config.yaml --epochs 30 --early-stop --test-after-train
 
 ## 分析deeplob 數據
-python scripts\monitor_deeplob.py --log-dir logs/deeplob_v5_fix_moderate
+python scripts\monitor_deeplob.py --log-dir logs/deeplob_v5_recovery
 
 
 

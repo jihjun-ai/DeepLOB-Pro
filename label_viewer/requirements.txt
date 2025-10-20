@@ -1,0 +1,11 @@
+# Label Viewer Dependencies
+# 互動式訓練數據標籤查看器依賴套件
+
+# Core Dependencies
+dash>=2.14.0          # Web 應用框架
+plotly>=5.18.0        # 互動式圖表庫
+pandas>=2.0.0         # 數據處理
+numpy>=1.24.0         # 數值計算
+
+# Optional (for better performance)
+# kaleido>=0.2.1      # 靜態圖表匯出（可選）

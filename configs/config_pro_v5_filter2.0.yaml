@@ -1,0 +1,50 @@
+# V5 Pro 實驗組 2 - 推薦篩選（2.0%）⭐ 推薦
+version: "5.0.0"
+description: "推薦篩選 - 震盪 2.0% ~ 10%，預期保留 ~57% 樣本"
+
+# 波動率設定
+volatility:
+  method: 'ewma'
+  halflife: 60
+
+# Triple-Barrier 參數
+triple_barrier:
+  pt_multiplier: 2.0
+  sl_multiplier: 2.0
+  max_holding: 50
+  min_return: 0.0002
+
+# 樣本權重
+sample_weights:
+  enabled: true
+  tau: 100.0
+  return_scaling: 10.0
+  balance_classes: true
+
+# 震盪篩選（推薦）⭐⭐⭐
+intraday_volatility_filter:
+  enabled: true
+  min_range_pct: 0.020  # 2.0% 下限（根據實際數據分析）
+  max_range_pct: 0.20   # 10% 上限（過濾極端異常）上下10%
+
+# 輸出設定
+output:
+  save_meta: true
+  save_weights: true
+  compression: 'compressed'
+
+# 資料處理參數
+data:
+  aggregation_factor: 10
+  seq_len: 100
+  alpha: 0.002
+  horizons: [1, 2, 3, 5, 10]
+  trading_start: 90000
+  trading_end: 133000
+
+# 資料切分
+split:
+  train_ratio: 0.7
+  val_ratio: 0.15
+  test_ratio: 0.15
+  seed: 42
