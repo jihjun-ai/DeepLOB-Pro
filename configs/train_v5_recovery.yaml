@@ -38,7 +38,7 @@ data:
     enabled: true
     expected_values: [-1, 0, 1]
 
-  use_sample_weights: false  # 🔧 關閉！權重異常 (max=539, Class1被壓制)
+  use_sample_weights: true   # 🔧 啟用！重新產生的數據權重已修正
   weights_normalize: "mean_to_1"
   use_stock_ids: false
   fail_on_missing_keys: true
@@ -49,10 +49,10 @@ dataloader:
   num_workers: 4
   pin_memory: true
 
-  # 🔧 禁用平衡採樣器（與手動權重衝突）
+  # 🔧 啟用平衡採樣器（搭配樣本權重使用）
   balance_sampler:
-    enabled: false  # ❌ 只用手動權重
-    strategy: "inv_freq"
+    enabled: true   # ✅ 啟用類別平衡採樣
+    strategy: "inv_freq"  # 反頻率採樣策略
 
 # ==================== 模型配置 ====================
 model:
