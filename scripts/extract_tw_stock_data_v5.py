@@ -359,9 +359,16 @@ def make_sample_weight(ret: pd.Series,
                       y: pd.Series,
                       tau: float = 100.0,
                       scale: float = 10.0,
-                      balance: bool = True) -> pd.Series:
+                      balance: bool = True,
+                      use_log_scale: bool = True) -> pd.Series:
     """
     样本权重计算（收益 × 时间衰减 × 类别平衡）
+
+    設計邏輯：
+      - 收益權重：反映樣本的重要性（大收益樣本更重要）
+      - 時間衰減：早觸發的樣本更重要（信號更明確）
+      - 類別平衡：每日獨立計算，反映當日的標籤分布特性
+      - 裁剪與歸一化：避免極端值，確保穩定性
 
     Args:
         ret: 实际收益序列
@@ -370,25 +377,52 @@ def make_sample_weight(ret: pd.Series,
         tau: 时间衰减参数
         scale: 收益缩放系数
         balance: 是否启用类别平衡
+        use_log_scale: 是否使用对数缩放（避免小收益被过度压制）
 
     Returns:
         w: 样本权重序列（归一化到均值为 1）
     """
     from sklearn.utils.class_weight import compute_class_weight
 
-    # 基础权重：|收益| × 时间衰减
-    base = np.abs(ret.values) * scale * np.exp(-tt.values / float(tau))
-    base = np.clip(base, 1e-3, None)
+    # 基础权重：收益部分
+    ret_array = np.array(ret.values, dtype=np.float64)
+    tt_array = np.array(tt.values, dtype=np.float64)
 
-    # 类别平衡
+    if use_log_scale:
+        # 对数缩放：log(1 + |return| * 1000) 避免小收益被压制
+        # 例如：0.0002 → log(1.2) ≈ 0.18, 0.0025 → log(3.5) ≈ 1.25 (比例約 7:1 而非 12:1)
+        ret_weight = np.log1p(np.abs(ret_array) * 1000) * scale
+        # 🔧 設置最小權重（避免極小收益權重過低）- 關鍵修正！
+        ret_weight = np.maximum(ret_weight, 0.1)  # 最小權重 0.1
+    else:
+        # 线性缩放：|return| * scale
+        ret_weight = np.abs(ret_array) * scale
+
+    # 时间衰减
+    time_decay = np.exp(-tt_array / float(tau))
+    base = ret_weight * time_decay
+    base = np.clip(base, 0.05, None)  # 🔧 提高最小值（1e-3 → 0.05）
+
+    # 类别平衡（按日計算，反映當日標籤分布）
     if balance:
         classes = np.array(sorted(y.unique()))
-        cls_w = compute_class_weight('balanced', classes=classes, y=y.values)
+        y_array = np.array(y.values, dtype=np.int64)
+        cls_w = compute_class_weight('balanced', classes=classes, y=y_array)
+
+        # 🔧 關鍵修正：裁剪類別權重本身（避免單日某類別樣本過少導致極端權重）
+        # 範例：當 Class 1 只有 1 個樣本時，sklearn 可能給出 56.7 的權重
+        cls_w = np.clip(cls_w, 0.5, 3.0)  # 限制在 [0.5, 3.0] 範圍
+        cls_w = cls_w / cls_w.mean()      # 歸一化（保持均值為 1）
+
         w_map = dict(zip(classes, cls_w))
-        cw = y.map(w_map).values
+        cw = np.array(y.map(w_map).values, dtype=np.float64)
         w = base * cw
     else:
         w = base
+
+    # 🔧 裁剪極端權重（避免過大或過小的權重主導訓練）
+    # 在歸一化前裁剪，避免極端值影響均值
+    w = np.clip(w, 0.1, 5.0)  # 🔧 降低上限（10.0 → 5.0）減少極端值
 
     # 归一化（均值为 1）
     w = w / np.mean(w)
@@ -989,7 +1023,8 @@ def sliding_windows_v5(
                         y=y_tb,
                         tau=config['sample_weights']['tau'],
                         scale=config['sample_weights']['return_scaling'],
-                        balance=config['sample_weights']['balance_classes']
+                        balance=config['sample_weights']['balance_classes'],
+                        use_log_scale=config['sample_weights'].get('use_log_scale', True)  # 🔧 改默認值為 True
                     )
                 else:
                     w = pd.Series(np.ones(len(y_tb)), index=y_tb.index)
@@ -1118,7 +1153,8 @@ def sliding_windows_v5(
             "enabled": config['sample_weights']['enabled'],
             "tau": config['sample_weights']['tau'],
             "return_scaling": config['sample_weights']['return_scaling'],
-            "balance_classes": config['sample_weights']['balance_classes']
+            "balance_classes": config['sample_weights']['balance_classes'],
+            "use_log_scale": config['sample_weights'].get('use_log_scale', False)
         },
 
         "normalization": {
