@@ -18,45 +18,13 @@ from typing import Dict, List, Tuple, Optional
 import numpy as np
 
 
-def scan_stock_files(data_dir: str) -> List[str]:
-    """
-    掃描數據目錄，找出所有 NPZ 文件
-
-    Args:
-        data_dir: 數據目錄路徑（例如：data/processed_v5/npz）
-
-    Returns:
-        股票 ID 列表（例如：['2330', '2317', ...]）
-
-    Example:
-        >>> stock_ids = scan_stock_files('data/processed_v5/npz')
-        >>> print(f'找到 {len(stock_ids)} 檔股票')
-    """
-    data_path = Path(data_dir)
-
-    if not data_path.exists():
-        raise FileNotFoundError(f"數據目錄不存在: {data_dir}")
-
-    # 尋找所有 stock_embedding_*.npz 文件
-    npz_files = list(data_path.glob("stock_embedding_*.npz"))
-
-    if not npz_files:
-        raise ValueError(f"目錄中沒有找到 NPZ 文件: {data_dir}")
-
-    # 提取股票 ID（從 stock_embedding_2330.npz 提取 2330）
-    stock_ids = []
-    for file_path in npz_files:
-        file_name = file_path.stem  # stock_embedding_2330
-        stock_id = file_name.replace("stock_embedding_", "")
-        stock_ids.append(stock_id)
-
-    return sorted(stock_ids)
+# v5 格式不需要掃描檔案，因為所有數據都在 stock_embedding_{split}.npz 中
 
 
 @functools.lru_cache(maxsize=3)
-def load_split_data(data_dir: str, split: str) -> Dict[str, np.ndarray]:
+def load_split_data_v5(data_dir: str, split: str) -> Dict[str, np.ndarray]:
     """
-    載入指定數據集的所有股票數據（使用 LRU Cache）
+    載入 extract_tw_stock_data_v5.py 產生的數據（v5 格式）
 
     Args:
         data_dir: 數據目錄路徑
@@ -65,95 +33,108 @@ def load_split_data(data_dir: str, split: str) -> Dict[str, np.ndarray]:
     Returns:
         字典，key=股票ID, value=數據字典（包含 features, labels, weights, metadata）
 
-    Raises:
-        ValueError: 如果 split 參數無效
-        FileNotFoundError: 如果目錄不存在
-
-    Example:
-        >>> data = load_split_data('data/processed_v5/npz', 'train')
-        >>> print(f"載入 {len(data)} 檔股票的訓練集數據")
-
     Notes:
-        - 使用 LRU Cache (maxsize=3) 快取最近訪問的 3 個數據集
-        - 典型快取：train, val, test 各一個
-        - 快取命中時，載入時間從 5 秒降至 < 0.5 秒
+        v5 格式：
+        - 檔案名：stock_embedding_train.npz, stock_embedding_val.npz, stock_embedding_test.npz
+        - 鍵名：X (特徵), y (標籤), weights (權重), stock_ids (股票ID列表)
+        - X shape: (N, 100, 20)
+        - y shape: (N,)
+        - weights shape: (N,)
+        - stock_ids: list of stock IDs
     """
     # 驗證參數
     valid_splits = ['train', 'val', 'test']
     if split not in valid_splits:
         raise ValueError(f"無效的 split 參數: {split}，必須是 {valid_splits} 之一")
 
-    # 掃描股票文件
-    stock_ids = scan_stock_files(data_dir)
+    # 載入合併的 NPZ 檔案
+    file_path = Path(data_dir) / f"stock_embedding_{split}.npz"
 
-    # 載入所有股票的數據
+    if not file_path.exists():
+        raise FileNotFoundError(f"找不到檔案: {file_path}")
+
+    print(f"[INFO] 載入檔案: {file_path}")
+    npz_data = np.load(file_path, allow_pickle=True)
+
+    # 載入 normalization metadata
+    import json
+    meta_path = Path(data_dir) / "normalization_meta.json"
+    if meta_path.exists():
+        with open(meta_path, 'r', encoding='utf-8') as f:
+            norm_meta = json.load(f)
+        print(f"[INFO] 載入 normalization metadata")
+    else:
+        norm_meta = None
+        print(f"[WARN] 找不到 normalization_meta.json，將無法重建收盤價")
+
+    # 檢查鍵名
+    expected_keys = ['X', 'y', 'weights', 'stock_ids']
+    actual_keys = list(npz_data.keys())
+    print(f"[DEBUG] 檔案鍵: {actual_keys}")
+
+    # 提取數據
+    X = npz_data['X']           # (N, 100, 20)
+    y = npz_data['y']           # (N,)
+    weights = npz_data['weights']  # (N,)
+    stock_ids = npz_data['stock_ids']  # 股票ID列表
+
+    print(f"[INFO] 數據形狀: X={X.shape}, y={y.shape}, weights={weights.shape}")
+    print(f"[INFO] 股票數量: {len(np.unique(stock_ids))}")
+
+    # 按股票ID拆分數據
     all_data = {}
+    unique_stocks = np.unique(stock_ids)
 
-    for stock_id in stock_ids:
-        file_path = Path(data_dir) / f"stock_embedding_{stock_id}.npz"
+    for stock_id in unique_stocks:
+        # 找出屬於這個股票的所有樣本
+        mask = stock_ids == stock_id
 
-        try:
-            # 載入 NPZ 文件
-            npz_data = np.load(file_path, allow_pickle=True)
+        stock_data = {
+            'features': X[mask],       # (N_stock, 100, 20)
+            'labels': y[mask],         # (N_stock,)
+            'weights': weights[mask],  # (N_stock,)
+            'metadata': norm_meta if norm_meta else {},  # 使用共用的 normalization metadata
+            'stock_id': str(stock_id),
+            'n_samples': int(np.sum(mask))
+        }
 
-            # 提取指定 split 的數據
-            feat_key = f'feat_{split}'
-            label_key = f'label_{split}'
-            weight_key = f'weight_{split}'
+        all_data[str(stock_id)] = stock_data
 
-            # 檢查必要的鍵是否存在
-            if feat_key not in npz_data:
-                print(f"警告：{stock_id} 缺少 {feat_key}，跳過")
-                continue
-
-            # 組織數據
-            stock_data = {
-                'features': npz_data[feat_key],      # (N, 100, 20)
-                'labels': npz_data[label_key],       # (N,)
-                'weights': npz_data[weight_key],     # (N,)
-                'metadata': npz_data['metadata'].item() if 'metadata' in npz_data else {},
-                'stock_id': stock_id,
-                'n_samples': len(npz_data[label_key])
-            }
-
-            all_data[stock_id] = stock_data
-
-        except Exception as e:
-            print(f"警告：載入 {stock_id} 時發生錯誤: {e}，跳過")
-            continue
-
-    if not all_data:
-        raise ValueError(f"未能載入任何股票數據（split={split}）")
-
-    print(f"成功載入 {len(all_data)} 檔股票的 {split} 數據集")
+    print(f"✅ 成功載入 {len(all_data)} 檔股票的 {split} 數據集")
     return all_data
 
 
-def get_stock_list(data_dir: str, split: str, top_n: Optional[int] = None) -> List[Tuple[str, int]]:
+def get_stock_list(data_dir: str, split: str, top_n: Optional[int] = None, sort_by: str = 'code') -> List[Tuple[str, int]]:
     """
-    獲取股票列表（按樣本數降序排序）
+    獲取股票列表
 
     Args:
         data_dir: 數據目錄路徑
         split: 數據集類型 ('train', 'val', 'test')
         top_n: 返回前 N 檔股票（None=全部）
+        sort_by: 排序方式 ('code'=股票代碼, 'samples'=樣本數)
 
     Returns:
-        列表，每個元素為 (股票ID, 樣本數)，按樣本數降序排序
+        列表，每個元素為 (股票ID, 樣本數)
 
     Example:
-        >>> stocks = get_stock_list('data/processed_v5/npz', 'train', top_n=10)
+        >>> stocks = get_stock_list('data/processed_v5/npz', 'train', sort_by='code')
         >>> for stock_id, n_samples in stocks:
         ...     print(f"{stock_id}: {n_samples} 樣本")
     """
     # 載入數據（利用 LRU Cache）
-    all_data = load_split_data(data_dir, split)
+    all_data = load_split_data_v5(data_dir, split)
 
     # 提取股票列表與樣本數
     stock_list = [(stock_id, data['n_samples']) for stock_id, data in all_data.items()]
 
-    # 按樣本數降序排序
-    stock_list.sort(key=lambda x: x[1], reverse=True)
+    # 排序
+    if sort_by == 'code':
+        # 按股票代碼排序（數字優先，然後字母）
+        stock_list.sort(key=lambda x: (int(x[0]) if x[0].isdigit() else float('inf'), x[0]))
+    else:
+        # 按樣本數降序排序
+        stock_list.sort(key=lambda x: x[1], reverse=True)
 
     # 返回前 N 個
     if top_n is not None:
@@ -188,7 +169,7 @@ def load_stock_data(data_dir: str, stock_id: str, split: str) -> Dict[str, np.nd
         >>> print(f"股票 {data['stock_id']} 有 {data['n_samples']} 個訓練樣本")
     """
     # 載入所有數據（利用 LRU Cache）
-    all_data = load_split_data(data_dir, split)
+    all_data = load_split_data_v5(data_dir, split)
 
     # 提取指定股票
     if stock_id not in all_data:
@@ -205,7 +186,7 @@ def clear_cache():
         >>> clear_cache()
         >>> print("快取已清除")
     """
-    load_split_data.cache_clear()
+    load_split_data_v5.cache_clear()
 
 
 def get_cache_info() -> dict:
@@ -223,7 +204,7 @@ def get_cache_info() -> dict:
         >>> info = get_cache_info()
         >>> print(f"快取命中率: {info['hits'] / (info['hits'] + info['misses']):.1%}")
     """
-    cache_info = load_split_data.cache_info()
+    cache_info = load_split_data_v5.cache_info()
     return {
         'hits': cache_info.hits,
         'misses': cache_info.misses,

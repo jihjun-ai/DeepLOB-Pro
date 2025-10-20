@@ -9,7 +9,7 @@ from .config import (
     DEFAULT_PORT,
 )
 from .price_builder import reconstruct_close_price
-from .data_loader import load_split_data, get_stock_list
+from .data_loader import load_split_data_v5, get_stock_list, load_stock_data
 
 __all__ = [
     'DEFAULT_DATA_DIR',
@@ -18,6 +18,7 @@ __all__ = [
     'LABEL_COLORS',
     'DEFAULT_PORT',
     'reconstruct_close_price',
-    'load_split_data',
+    'load_split_data_v5',
     'get_stock_list',
+    'load_stock_data',
 ]

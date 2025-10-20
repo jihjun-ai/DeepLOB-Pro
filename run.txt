@@ -6,6 +6,9 @@ python scripts/extract_tw_stock_data_v5.py --output-dir ./data/processed_v5_bala
 ##只統計不生成資料# 僅統計模式（待實作）
 python scripts/extract_tw_stock_data_v5.py --input-dir ./data/temp --output-dir ./data/volatility_only --config configs/config_pro_v5_balanced_optimal.yaml --stats-only  
 
+python scripts/extract_tw_stock_data_v5.py --input-dir ./data/temp --output-dir ./data/processed_v5_fixed --config ./configs/config_pro_v5_ml_optimal.yaml 
+
+
 ##檢查資料健康度
 python scripts/check_data_health_v5.py --data-dir ./data/processed_v5_filter2.0/npz --save-report --plot --verbose
 
@@ -23,11 +26,15 @@ python scripts/train_deeplob_v5.py --config configs/train_v5_recovery.yaml --dat
 python scripts/train_deeplob_v5.py --config configs/train_v5_recovery_v6.yaml --data-dir ./data/processed_v5/npz --epochs 50
 python scripts/train_deeplob_v5.py --config configs/train_v5_recovery_v7.yaml --data-dir ./data/processed_v5_balanced/npz --epochs 50
 
-python scripts/train_deeplob_v5.py --config configs/train_v5_recovery.yaml --data-dir ./data/processed_v5_balanced/npz --epochs 10
+python scripts/train_deeplob_v5.py --config configs/train_v5_recovery.yaml --data-dir ./data/processed_v5_fixed/npz --epochs 50
+
+
 
 ##篩選 2% 震盪資料
 python scripts/extract_tw_stock_data_v5.py --config configs/config_pro_v5_filter2.0.yaml --output-dir ./data/processed_v5_filter2.0
-```
+
+步驟 1: 快速驗證（5-10 分鐘）
+python scripts/verify_fix_v5.py --input-dir ./data/temp --output-dir ./data/test_fix --max-files 5
 
 
 

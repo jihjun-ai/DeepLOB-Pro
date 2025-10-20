@@ -1,6 +1,7 @@
 # ===================================================================
-# DeepLOB V5 恢復配置 - 基於調參歷史修復
+# DeepLOB V5 恢復配置 - 基於 ML Optimal 新數據集
 # 目標：修復過擬合 + 驗證損失爆炸問題
+# 數據來源：config_pro_v5_ml_optimal.yaml 生成的 processed_v5_fixed
 # 參考：實驗 #4 失敗經驗 + 原始 v5 成功配置
 # ===================================================================
 
@@ -27,10 +28,10 @@ visualization:
     cmap: "Blues"
 
 data:
-  train: "data/processed_v5_balanced/npz/stock_embedding_train.npz"
-  val: "data/processed_v5_balanced/npz/stock_embedding_val.npz"
-  test: "data/processed_v5_balanced/npz/stock_embedding_test.npz"
-  norm_meta: "data/processed_v5_balanced/npz/normalization_meta.json"
+  train: "data/processed_v5_fixed/npz/stock_embedding_train.npz"
+  val: "data/processed_v5_fixed/npz/stock_embedding_val.npz"
+  test: "data/processed_v5_fixed/npz/stock_embedding_test.npz"
+  norm_meta: "data/processed_v5_fixed/npz/normalization_meta.json"
 
   v5_labels: true
   y_raw_validation:
@@ -141,7 +142,7 @@ inference:
 
 # ==================== 日誌配置 ====================
 logging:
-  dir: "logs/deeplob_v5_recovery"
+  dir: "logs/deeplob_v5_fixed"
   save_best_by: "val.f1_macro_unweighted"
 
   artifacts:
@@ -175,39 +176,55 @@ hardware:
 # ==================== 續訓配置 ====================
 resume:
   enabled: false
-  checkpoint_path: "checkpoints/v5_recovery/deeplob_v5_best.pth"
+  checkpoint_path: "checkpoints/v5_fixed/deeplob_v5_best.pth"
   load_optimizer: true
 
 # ==================== 其他配置 ====================
 misc:
   save_last: true
-  output_dir: "checkpoints/v5_recovery"
+  output_dir: "checkpoints/v5_fixed"
 
 # ===================================================================
-# 修改總結（恢復版）
+# 修改總結（ML Optimal 數據集版本）
 # ===================================================================
 # 🎯 目標：修復過擬合 + 驗證損失爆炸
 #
-# 關鍵調整：
+# 📊 數據來源：
+#   - config_pro_v5_ml_optimal.yaml 生成
+#   - 數據目錄：./data/processed_v5_fixed
+#   - 特點：
+#     * respect_day_boundary: true（防跨日污染）
+#     * min_return: 0.0015 (0.15%)
+#     * pt_multiplier/sl_multiplier: 3.5σ
+#     * max_holding: 40 bars（日內限制）
+#     * EWMA 波動率（每日重置）
+#
+# 🔧 關鍵調整：
 # 1. ✅ Batch size 256→512（穩定梯度）
-# 2. ✅ Dropout 0.3→0.5（強正則化）
+# 2. ✅ Dropout 0.3→0.6（強正則化）
 # 3. ✅ LR 0.00012→0.00008（降低學習率）
 # 4. ✅ Weight decay 0.0003→0.0005（增強L2）
 # 5. ✅ Grad clip 0.8→0.5（控制梯度爆炸）
-# 6. ✅ Label smoothing 0.0→0.1（防止過度自信）
+# 6. ✅ Label smoothing 0.0→0.15（防止過度自信）
 # 7. ✅ Warmup 0.1→0.15（更穩定啟動）
-# 8. ✅ 手動權重 [2.5, 1.0, 2.8]（更激進）
-# 9. ✅ Epochs 60→80, Patience 15→20（延長觀察期）
+# 8. ✅ Class weights: auto（自動適應新數據分布）
+# 9. ✅ Epochs 50, Patience 15（標準設定）
 #
-# 預期效果：
+# 📈 預期效果：
 #   - 驗證損失收斂（不再爆炸）
 #   - 訓練/驗證差距縮小至 <10%
 #   - 梯度穩定在 <5.0
 #   - 驗證 F1 > 50% (目標 > 65%)
+#   - Class 1（持平）比例增加至 35-45%
 #
-# 使用方法：
+# 🚀 使用方法：
 #   python scripts/train_deeplob_v5.py \
 #       --config configs/train_v5_recovery.yaml \
-#       --data-dir ./data/processed_v5_balanced/npz \
-#       --epochs 80
+#       --data-dir ./data/processed_v5_fixed/npz \
+#       --epochs 50
+#
+# 💡 監控重點：
+#   - Class 1 召回率（應 > 50%，避免橫盤誤交易）
+#   - 三類 F1 均衡性（避免某類過低）
+#   - 驗證損失曲線（應平滑下降）
 # ===================================================================

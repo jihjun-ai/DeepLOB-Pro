@@ -242,7 +242,8 @@ def tb_labels(close: pd.Series,
               pt_mult: float = 2.0,
               sl_mult: float = 2.0,
               max_holding: int = 200,
-              min_return: float = 0.0001) -> pd.DataFrame:
+              min_return: float = 0.0001,
+              day_end_idx: Optional[int] = None) -> pd.DataFrame:
     """
     Triple-Barrier 标签生成（自定义实现）
 
@@ -253,6 +254,7 @@ def tb_labels(close: pd.Series,
         sl_mult: 止损倍数
         max_holding: 最大持有期（bars）
         min_return: 最小报酬阈值
+        day_end_idx: 当日最后一个索引（防止越日，None 表示无限制）
 
     Returns:
         DataFrame 包含:
@@ -275,8 +277,12 @@ def tb_labels(close: pd.Series,
             up_barrier = entry_price * (1 + pt_mult * entry_vol)
             dn_barrier = entry_price * (1 - sl_mult * entry_vol)
 
-            # 查找触发点
-            end_idx = min(i + max_holding, n)
+            # 查找触发点（关键修正：限制在当日内）
+            if day_end_idx is not None:
+                end_idx = min(i + max_holding, day_end_idx + 1, n)
+            else:
+                end_idx = min(i + max_holding, n)
+
             triggered = False
             trigger_idx = end_idx - 1
             trigger_why = 'time'
@@ -302,11 +308,16 @@ def tb_labels(close: pd.Series,
             exit_price = close.iloc[trigger_idx]
             ret = (exit_price - entry_price) / entry_price
 
-            # 应用最小报酬阈值（核心修正：所有样本都要检查阈值）
-            if np.abs(ret) < min_return:
-                label = 0  # 持平（收益太小，视为无趋势）
+            # 核心修正：只有 vertical（时间到）时才用 min_return 判断
+            if trigger_why == 'time':
+                # 时间到期：检查是否超过最小报酬阈值
+                if np.abs(ret) < min_return:
+                    label = 0  # 持平（收益太小）
+                else:
+                    label = int(np.sign(ret))  # -1（下跌）或 1（上涨）
             else:
-                label = int(np.sign(ret))  # -1（下跌）或 1（上涨）
+                # PT/SL 触发：固定标签为 ±1
+                label = int(np.sign(ret))
 
             results.append({
                 'ret': ret,
@@ -794,13 +805,13 @@ def sliding_windows_v5(
     config: Dict[str, Any]
 ):
     """
-    V5 滑窗流程：
-    1. 以股票为单位串接资料
-    2. 计算波动率（EWMA/YZ/GARCH）
-    3. 生成 Triple-Barrier 标签
-    4. 计算样本权重
-    5. 产生滑窗样本
-    6. 70/15/15 切分
+    V5 滑窗流程（修正版：按日处理，防止跨日污染）：
+    1. 以 (symbol, date) 为单位独立处理
+    2. 每日独立：标准化 → 波动率 → triple-barrier → 滑窗
+    3. 波动率状态每天重置
+    4. vertical barrier 禁止越日
+    5. 滑窗不得跨日
+    6. 样本汇总后按股票切分 70/15/15
     """
     global global_stats
 
@@ -808,30 +819,32 @@ def sliding_windows_v5(
         logging.warning("没有资料可供产生 .npz 档案")
         return
 
+    respect_day_boundary = config.get('respect_day_boundary', True)
+
     logging.info(f"\n{'='*60}")
-    logging.info(f"V5 滑窗流程开始，共 {len(days_points)} 个 symbol-day 组合")
+    logging.info(f"V5 滑窗流程开始（按日处理模式），共 {len(days_points)} 个 symbol-day 组合")
+    logging.info(f"日界线保护: {'启用' if respect_day_boundary else '禁用'}")
     logging.info(f"{'='*60}")
 
-    # 步骤 1: 以股票为单位重组资料
-    stock_data = defaultdict(lambda: {'dates': [], 'X': [], 'mids': []})
+    # 步骤 1: 重组资料（保留日期结构）
+    stock_data = defaultdict(lambda: {'day_data': []})  # [(date, X, mids)]
 
     for date, sym, Xd, mids in days_points:
-        stock_data[sym]['dates'].append(date)
-        stock_data[sym]['X'].append(Xd)
-        stock_data[sym]['mids'].append(mids)
+        stock_data[sym]['day_data'].append((date, Xd, mids))
 
     logging.info(f"共 {len(stock_data)} 个股票有资料")
 
-    # 对每个股票，按日期排序并串接
+    # 步骤 2: 对每个股票，按日期排序（但不合并）
     stock_sequences = []
 
     for sym, data in stock_data.items():
-        sorted_indices = np.argsort(data['dates'])
+        # 按日期排序
+        day_data_sorted = sorted(data['day_data'], key=lambda x: x[0])
 
-        X_concat = np.concatenate([data['X'][i] for i in sorted_indices], axis=0)
-        mids_concat = np.concatenate([data['mids'][i] for i in sorted_indices], axis=0)
+        # 计算总时间点
+        total_points = sum(Xd.shape[0] for _, Xd, _ in day_data_sorted)
 
-        stock_sequences.append((sym, X_concat.shape[0], X_concat, mids_concat))
+        stock_sequences.append((sym, total_points, day_data_sorted))
 
     # 按时间点数量排序（仅用于统计）
     stock_sequences_sorted = sorted(stock_sequences, key=lambda x: x[1], reverse=True)
@@ -840,7 +853,7 @@ def sliding_windows_v5(
     logging.info(f"  最多: {stock_sequences_sorted[0][1]} 个点 ({stock_sequences_sorted[0][0]})")
     logging.info(f"  最少: {stock_sequences_sorted[-1][1]} 个点 ({stock_sequences_sorted[-1][0]})")
 
-    # 步骤 2: 过滤太短的股票序列
+    # 步骤 3: 过滤太短的股票序列
     MIN_POINTS = SEQ_LEN + 50  # 100 + 50 = 150
 
     valid_stocks = [s for s in stock_sequences if s[1] >= MIN_POINTS]
@@ -881,12 +894,16 @@ def sliding_windows_v5(
         'test': test_stocks
     }
 
-    # 步骤 4: 计算训练集的 Z-Score 参数
+    # 步骤 4: 计算训练集的 Z-Score 参数（基于所有训练集日期）
     logging.info(f"\n{'='*60}")
     logging.info("计算 Z-Score 参数（基于训练集）")
     logging.info(f"{'='*60}")
 
-    train_X_list = [stock[2] for stock in train_stocks]
+    train_X_list = []
+    for sym, n_points, day_data_sorted in train_stocks:
+        for date, Xd, mids in day_data_sorted:
+            train_X_list.append(Xd)
+
     Xtr = np.concatenate(train_X_list, axis=0) if train_X_list else np.zeros((0, 20))
 
     if Xtr.size == 0:
@@ -897,9 +914,9 @@ def sliding_windows_v5(
         mu, sd = zscore_fit(Xtr)
         logging.info(f"训练集大小: {Xtr.shape[0]:,} 个时间点")
 
-    # 步骤 5: 产生滑窗样本（V5 核心）
+    # 步骤 5: 产生滑窗样本（V5 核心：按日处理）
     def build_split_v5(split_name):
-        """对一个 split 产生 V5 滑窗样本"""
+        """对一个 split 产生 V5 滑窗样本（按日独立处理）"""
         stock_list = splits[split_name]
 
         logging.info(f"\n{'='*60}")
@@ -912,93 +929,122 @@ def sliding_windows_v5(
         stock_ids = []
 
         total_windows = 0
+        total_days = 0
+        cross_day_filtered = 0
         tb_stats = {"up": 0, "down": 0, "time": 0}
 
-        for sym, n_points, Xd, mids in stock_list:
-            # Z-score 正规化
-            Xn = zscore_apply(Xd, mu, sd)
+        for sym, n_points, day_data_sorted in stock_list:
+            stock_windows = 0
 
-            # 构建 DataFrame 用于 V5 标签生成
-            close = pd.Series(mids, name='close')
+            # 核心修正：逐日独立处理
+            for date, Xd, mids in day_data_sorted:
+                total_days += 1
 
-            # 计算波动率
-            vol_method = config['volatility']['method']
+                # 1. Z-score 正规化（每日独立）
+                Xn = zscore_apply(Xd, mu, sd)
 
-            # 计算波动率（失败则抛出异常）
-            if vol_method == 'ewma':
-                vol = ewma_vol(close, halflife=config['volatility']['halflife'])
-            elif vol_method == 'garch':
-                vol = garch11_vol(close)
-            else:
-                raise ValueError(f"不支援的波动率方法: {vol_method}，请使用 'ewma' 或 'garch'")
+                # 2. 构建 DataFrame 用于 V5 标签生成
+                close = pd.Series(mids, name='close')
 
-            # 生成 Triple-Barrier 标签（失败则停止流程）
-            tb_cfg = config['triple_barrier']
-            tb_df = tb_labels(
-                close=close,
-                vol=vol,
-                pt_mult=tb_cfg['pt_multiplier'],
-                sl_mult=tb_cfg['sl_multiplier'],
-                max_holding=tb_cfg['max_holding'],
-                min_return=tb_cfg['min_return']
-            )
+                # 3. 计算波动率（每日重置状态）
+                vol_method = config['volatility']['method']
 
-            # 转换标签 {-1,0,1} → {0,1,2}
-            y_tb = tb_df["y"].map({-1: 0, 0: 1, 1: 2})
-
-            # 计算样本权重
-            if config['sample_weights']['enabled']:
-                w = make_sample_weight(
-                    ret=tb_df["ret"],
-                    tt=tb_df["tt"],
-                    y=y_tb,
-                    tau=config['sample_weights']['tau'],
-                    scale=config['sample_weights']['return_scaling'],
-                    balance=config['sample_weights']['balance_classes']
-                )
-            else:
-                w = pd.Series(np.ones(len(y_tb)), index=y_tb.index)
-
-            # 统计触发原因
-            for reason in tb_df["why"].value_counts().items():
-                if reason[0] in tb_stats:
-                    tb_stats[reason[0]] += reason[1]
-
-            # 产生滑窗样本
-            T = Xn.shape[0]
-            max_t = min(T, len(y_tb))
-
-            if max_t < SEQ_LEN:
-                logging.warning(f"  {sym}: 跳过（只有 {max_t} 个点）")
-                continue
-
-            windows_count = 0
-
-            for t in range(SEQ_LEN - 1, max_t):
-                window = Xn[t - SEQ_LEN + 1:t + 1, :]
-
-                if window.shape[0] != SEQ_LEN:
+                try:
+                    if vol_method == 'ewma':
+                        vol = ewma_vol(close, halflife=config['volatility']['halflife'])
+                    elif vol_method == 'garch':
+                        vol = garch11_vol(close)
+                    else:
+                        raise ValueError(f"不支援的波动率方法: {vol_method}")
+                except Exception as e:
+                    logging.warning(f"  {sym} @ {date}: 波动率计算失败 ({e})，跳过")
                     continue
 
-                label = int(y_tb.iloc[t])
-                weight = float(w.iloc[t])
+                # 4. 生成 Triple-Barrier 标签（限制在当日内）
+                tb_cfg = config['triple_barrier']
+                day_end_idx = len(close) - 1 if respect_day_boundary else None
 
-                if label not in [0, 1, 2]:
+                try:
+                    tb_df = tb_labels(
+                        close=close,
+                        vol=vol,
+                        pt_mult=tb_cfg['pt_multiplier'],
+                        sl_mult=tb_cfg['sl_multiplier'],
+                        max_holding=tb_cfg['max_holding'],
+                        min_return=tb_cfg['min_return'],
+                        day_end_idx=day_end_idx
+                    )
+                except Exception as e:
+                    logging.warning(f"  {sym} @ {date}: Triple-Barrier 失败 ({e})，跳过")
                     continue
 
-                X_windows.append(window.astype(np.float32))
-                y_labels.append(label)
-                weights.append(weight)
-                stock_ids.append(sym)
-                windows_count += 1
+                # 5. 转换标签 {-1,0,1} → {0,1,2}
+                y_tb = tb_df["y"].map({-1: 0, 0: 1, 1: 2})
 
-            if windows_count > 0:
-                logging.info(f"  {sym}: {windows_count:,} 个样本 (共 {T} 个点)")
+                # 6. 计算样本权重
+                if config['sample_weights']['enabled']:
+                    w = make_sample_weight(
+                        ret=tb_df["ret"],
+                        tt=tb_df["tt"],
+                        y=y_tb,
+                        tau=config['sample_weights']['tau'],
+                        scale=config['sample_weights']['return_scaling'],
+                        balance=config['sample_weights']['balance_classes']
+                    )
+                else:
+                    w = pd.Series(np.ones(len(y_tb)), index=y_tb.index)
 
-            total_windows += windows_count
+                # 7. 统计触发原因
+                for reason in tb_df["why"].value_counts().items():
+                    if reason[0] in tb_stats:
+                        tb_stats[reason[0]] += reason[1]
 
-        logging.info(f"\n{split_name.upper()} 总计: {total_windows:,} 个样本")
+                # 8. 产生滑窗样本（禁止跨日）
+                T = Xn.shape[0]
+                max_t = min(T, len(y_tb))
+
+                if max_t < SEQ_LEN:
+                    continue
+
+                day_windows = 0
+
+                for t in range(SEQ_LEN - 1, max_t):
+                    # 检查滑窗是否跨日（如果启用日界线保护）
+                    window_start = t - SEQ_LEN + 1
+
+                    if respect_day_boundary and window_start < 0:
+                        cross_day_filtered += 1
+                        continue
+
+                    window = Xn[window_start:t + 1, :]
+
+                    if window.shape[0] != SEQ_LEN:
+                        continue
+
+                    label = int(y_tb.iloc[t])
+                    weight = float(w.iloc[t])
+
+                    if label not in [0, 1, 2]:
+                        continue
+
+                    X_windows.append(window.astype(np.float32))
+                    y_labels.append(label)
+                    weights.append(weight)
+                    stock_ids.append(sym)
+                    day_windows += 1
+
+                stock_windows += day_windows
+
+            if stock_windows > 0:
+                logging.info(f"  {sym}: {stock_windows:,} 个样本 (共 {n_points} 个点，{len(day_data_sorted)} 天)")
+
+            total_windows += stock_windows
+
+        logging.info(f"\n{split_name.upper()} 总计: {total_windows:,} 个样本 (来自 {total_days} 个 symbol-day)")
         logging.info(f"触发原因分布: {tb_stats}")
+
+        if respect_day_boundary and cross_day_filtered > 0:
+            logging.info(f"跨日过滤: {cross_day_filtered} 个滑窗被移除")
 
         global_stats["valid_windows"] += total_windows
 
@@ -1011,10 +1057,13 @@ def sliding_windows_v5(
             # 统计资讯
             unique_stocks = len(np.unique(sid_array))
             label_dist = np.bincount(y_array, minlength=3)
+            label_pct = label_dist / label_dist.sum() * 100 if label_dist.sum() > 0 else np.zeros(3)
 
             logging.info(f"  形状: X={X_array.shape}, y={y_array.shape}, w={w_array.shape}")
             logging.info(f"  涵盖股票: {unique_stocks} 档")
-            logging.info(f"  标签分布: 上涨={label_dist[0]}, 持平={label_dist[1]}, 下跌={label_dist[2]}")
+            logging.info(f"  标签分布: 下跌={label_dist[0]} ({label_pct[0]:.1f}%), "
+                        f"持平={label_dist[1]} ({label_pct[1]:.1f}%), "
+                        f"上涨={label_dist[2]} ({label_pct[2]:.1f}%)")
             logging.info(f"  权重统计: mean={w_array.mean():.3f}, std={w_array.std():.3f}, max={w_array.max():.3f}")
 
             return X_array, y_array, w_array, sid_array
