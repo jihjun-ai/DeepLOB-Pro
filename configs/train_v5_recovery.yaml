@@ -38,8 +38,8 @@ data:
     enabled: true
     expected_values: [-1, 0, 1]
 
-  use_sample_weights: false  # ❌ 關閉（對數縮放未生效，權重仍有問題）
-  weights_normalize: "mean_to_1"  # 備用
+  use_sample_weights: true   # ✅ 啟用（數據已實現按日權重+裁剪類別權重）
+  weights_normalize: "mean_to_1"  # 權重歸一化策略
   use_stock_ids: false
   fail_on_missing_keys: true
 

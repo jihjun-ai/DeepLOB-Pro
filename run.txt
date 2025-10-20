@@ -8,7 +8,7 @@ python scripts/extract_tw_stock_data_v5.py --input-dir ./data/temp --output-dir 
 python scripts/extract_tw_stock_data_v5.py --input-dir ./data/temp --output-dir ./data/processed_v5_fixed --config ./configs/config_pro_v5_ml_optimal.yaml 
 
 ### 檢查權重
-python diagnose_weights_emergency.py
+python diagnose_weights_emergency.py 
 
 
 ##檢查資料健康度
