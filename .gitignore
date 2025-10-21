@@ -158,3 +158,6 @@ strategy_performance/
 *.json
 *.pt
 *.png
+
+data/
+checkpoints/
