@@ -1,11 +1,22 @@
 conda activate deeplob-pro
 
+scripts\batch_preprocess.bat
+
+步驟 2: 生成訓練數據（已修復洩漏 ✅）
+
+**目的**: 從 NPZ 生成訓練數據（已修復 bfill 洩漏）
+python scripts\extract_tw_stock_data_v6.py --preprocessed-dir data\preprocessed_v5_1hz --output-dir data\processed_v6 --config configs\config_pro_v5_ml_optimal.yaml
+
+
+
+
 ##取資料
 python scripts/extract_tw_stock_data_v5.py
 ##只統計不生成資料# 僅統計模式（待實作）
 python scripts/extract_tw_stock_data_v5.py --input-dir ./data/temp --output-dir ./data/volatility_only --config configs/config_pro_v5_balanced_optimal.yaml --stats-only  
 
 python scripts/extract_tw_stock_data_v5.py --input-dir ./data/temp --output-dir ./data/processed_v5_fixed --config ./configs/config_pro_v5_ml_optimal.yaml 
+python scripts/extract_tw_stock_data_v5.py --config configs/config_pro_v5_ml_optimal.yaml --output ./data/processed_v5_fixed
 
 ### 檢查權重
 python diagnose_weights_emergency.py 
@@ -13,6 +24,13 @@ python diagnose_weights_emergency.py
 
 ##檢查資料健康度
 python scripts/check_data_health_v5.py --data-dir ./data/processed_v5_fixed/npz --save-report --plot --verbose
+
+
+
+###測試
+python scripts/preprocess_single_day.py --input ./data/temp/20250901.txt --output-dir ./data/preprocessed_v5_1hz --config ./configs/config_pro_v5_ml_optimal.yam
+
+
 
 
 
@@ -182,3 +200,9 @@ epoch,train_loss,val_loss,train_acc,val_acc,val_f1_weighted,val_f1_unweighted,le
 請依訓練數據調整
 參數檔:train_v5.yaml
 參考歷史調參資料(20251018-調參歷史.md)
+
+
+
+編碼問題 - 中文註解和 echo 導致亂碼
+路徑問題 - 相對路徑在不同目錄執行會失敗
+特殊字元 - ✅ ❌ 等 emoji 會顯示為亂碼

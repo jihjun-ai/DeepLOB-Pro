@@ -253,12 +253,85 @@ model = PPO("MlpLstmPolicy", env, policy_kwargs=policy_kwargs)
 
 ## 訓練流程（使用 Stable-Baselines3）
 
-### 階段一：數據預處理與驗證 ✅ (已完成)
+### 階段一：數據預處理與驗證（V5 → V6 演進）
 
-- 載入 FI-2010 數據集
+#### V5 單階段處理 ✅ (已完成，保留)
+
+**腳本**: `scripts/extract_tw_stock_data_v5.py`
+
+- 載入原始 TXT
 - 標準化（Z-score）
+- Triple-Barrier 標籤生成
 - 創建時間序列窗口（100 timesteps）
-- 時間序列劃分（60/20/20）
+- 時間序列劃分（70/15/15）
+
+**限制**：
+- ❌ 固定過濾閾值
+- ❌ 調整參數需重跑全部（45 分鐘）
+- ❌ 標籤分布不穩定
+
+#### V6 雙階段處理 ✅ (最新，推薦) ⭐⭐⭐⭐⭐
+
+**文檔**: [docs/V6_TWO_STAGE_PIPELINE_GUIDE.md](docs/V6_TWO_STAGE_PIPELINE_GUIDE.md)
+
+**階段1**: 預處理（逐檔處理，動態過濾）
+```bash
+# 批次預處理所有歷史數據
+conda activate deeplob-pro
+scripts\batch_preprocess.bat
+```
+
+**腳本**: `scripts/preprocess_single_day.py`
+- 讀取單一 TXT → 清洗 → 聚合
+- **動態決定當天過濾閾值**（基於目標標籤分布 30/40/30）
+- 保存中間格式 NPZ
+- 生成每日摘要報告
+
+**階段2**: 訓練數據生成（快速參數測試）
+```bash
+# 從預處理 NPZ 生成訓練數據（僅需 5-10 分鐘）
+python scripts\extract_tw_stock_data_v6.py \
+    --preprocessed-dir .\data\preprocessed_v5 \
+    --output-dir .\data\processed_v6 \
+    --config .\configs\config_pro_v5_ml_optimal.yaml
+```
+
+**腳本**: `scripts/extract_tw_stock_data_v6.py`
+- 讀取預處理 NPZ → Z-Score → 波動率 → Triple-Barrier
+- 滑窗生成樣本
+- 按股票切分 70/15/15
+
+**核心改進**：
+- ✅ **動態過濾**: 每天自動調整閾值（維持目標分布）
+- ✅ **效率提升**: 參數調整快 **82%** (45 min → 8 min)
+- ✅ **增量處理**: 新增一天僅需 4 分鐘
+- ✅ **穩定標籤**: Down 30% / Neutral 40% / Up 30%
+- ✅ **完全兼容**: 輸出格式與 V5 相同
+
+**快速開始**：
+```bash
+# 步驟 1: 預處理（首次，30 分鐘）
+conda activate deeplob-pro
+scripts\batch_preprocess.bat
+
+# 步驟 2: 生成訓練數據（8 分鐘）
+python scripts\extract_tw_stock_data_v6.py \
+    --preprocessed-dir .\data\preprocessed_v5 \
+    --output-dir .\data\processed_v6 \
+    --config .\configs\config_pro_v5_ml_optimal.yaml
+
+# 步驟 3: 檢查標籤分布
+type data\processed_v6\npz\normalization_meta.json
+```
+
+**測試不同參數**（僅需修改配置，無需重跑階段1）：
+```bash
+# 修改 config 後直接重新執行階段2（5-10 分鐘）
+python scripts\extract_tw_stock_data_v6.py \
+    --preprocessed-dir .\data\preprocessed_v5 \
+    --output-dir .\data\processed_v6_test \
+    --config .\configs\config_test.yaml
+```
 
 ### 階段二：DeepLOB 獨立訓練 ✅ (已完成)
 

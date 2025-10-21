@@ -35,6 +35,13 @@ respect_day_boundary: true  # 強制啟用日界線保護（預設 true）
 #   3. 滑窗禁止跨日（昨天尾盤 + 今天開盤不視為連續）
 #   4. 「時間到」樣本回歸正常比例 → Class 1（持平）自然出現
 
+# A.2: 滑窗品質過濾（避免過度 ffill 的假訊號）
+ffill_quality_threshold: 0.5  # 滑窗內 ffill 占比 > 50% 則跳過
+# 說明：
+#   - ffill (mask=1) 是前向填充的值，非真實報價
+#   - 過多 ffill 表示該時段市場不活躍，可能產生假訊號
+#   - 建議值：0.5（50%），可根據實際情況調整（0.3-0.7）
+
 # 波動率設定
 volatility:
   method: 'ewma'  # EWMA 對高頻數據反應更快
