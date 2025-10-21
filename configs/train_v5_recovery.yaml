@@ -38,7 +38,7 @@ data:
     enabled: true
     expected_values: [-1, 0, 1]
 
-  use_sample_weights: true   # ✅ 啟用（數據已實現按日權重+裁剪類別權重）
+  use_sample_weights: false  # ❌ 暫時關閉（先驗證無權重時 Class 1 是否正常）
   weights_normalize: "mean_to_1"  # 權重歸一化策略
   use_stock_ids: false
   fail_on_missing_keys: true

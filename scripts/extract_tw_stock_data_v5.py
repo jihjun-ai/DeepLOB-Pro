@@ -94,7 +94,7 @@ import pandas as pd
 import sys
 from pathlib import Path
 
-# 添加项目根目录到 Python 路径
+# 添加项目根目录到 Python 跄径
 project_root = Path(__file__).parent.parent
 if str(project_root) not in sys.path:
     sys.path.insert(0, str(project_root))
@@ -420,12 +420,10 @@ def make_sample_weight(ret: pd.Series,
     else:
         w = base
 
-    # 🔧 裁剪極端權重（避免過大或過小的權重主導訓練）
-    # 在歸一化前裁剪，避免極端值影響均值
-    w = np.clip(w, 0.1, 5.0)  # 🔧 降低上限（10.0 → 5.0）減少極端值
-
-    # 归一化（均值为 1）
-    w = w / np.mean(w)
+    # 🔧 先歸一化，再裁剪（關鍵修正！）
+    # 順序很重要：如果先裁剪再歸一化，歸一化會破壞裁剪效果
+    w = w / np.mean(w)  # 先歸一化（均值為 1）
+    w = np.clip(w, 0.1, 5.0)  # 再裁剪（確保最終範圍 [0.1, 5.0]）
 
     return pd.Series(w, index=y.index)
 
@@ -846,6 +844,7 @@ def sliding_windows_v5(
     4. vertical barrier 禁止越日
     5. 滑窗不得跨日
     6. 样本汇总后按股票切分 70/15/15
+    7. 【新增】波动率过滤：排除波动率过低的股票日
     """
     global global_stats
 
@@ -855,9 +854,14 @@ def sliding_windows_v5(
 
     respect_day_boundary = config.get('respect_day_boundary', True)
 
+    # 【新增】波动率过滤参数
+    vol_filter_enabled = config.get('volatility_filter', {}).get('enabled', False)
+    min_vol_threshold = config.get('volatility_filter', {}).get('min_daily_vol', 0.0001)  # 0.01%
+
     logging.info(f"\n{'='*60}")
     logging.info(f"V5 滑窗流程开始（按日处理模式），共 {len(days_points)} 个 symbol-day 组合")
     logging.info(f"日界线保护: {'启用' if respect_day_boundary else '禁用'}")
+    logging.info(f"波动率过滤: {'启用' if vol_filter_enabled else '禁用'} (阈值: {min_vol_threshold*100:.3f}%)")
     logging.info(f"{'='*60}")
 
     # 步骤 1: 重组资料（保留日期结构）
@@ -966,6 +970,7 @@ def sliding_windows_v5(
         total_days = 0
         cross_day_filtered = 0
         tb_stats = {"up": 0, "down": 0, "time": 0}
+        vol_filtered_days = 0  # 新增：记录因波动率过滤而移除的天数
 
         for sym, n_points, day_data_sorted in stock_list:
             stock_windows = 0
@@ -1073,13 +1078,19 @@ def sliding_windows_v5(
             if stock_windows > 0:
                 logging.info(f"  {sym}: {stock_windows:,} 个样本 (共 {n_points} 个点，{len(day_data_sorted)} 天)")
 
-            total_windows += stock_windows
+            # 【新增】统计因波动率过滤而移除的天数
+            if vol_filter_enabled and stock_windows == 0:
+                vol_filtered_days += 1
 
         logging.info(f"\n{split_name.upper()} 总计: {total_windows:,} 个样本 (来自 {total_days} 个 symbol-day)")
         logging.info(f"触发原因分布: {tb_stats}")
 
         if respect_day_boundary and cross_day_filtered > 0:
             logging.info(f"跨日过滤: {cross_day_filtered} 个滑窗被移除")
+
+        # 【新增】波动率过滤统计
+        if vol_filter_enabled and vol_filtered_days > 0:
+            logging.info(f"波动率过滤: {vol_filtered_days} 个股票日被移除 ({vol_filtered_days/total_days*100:.1f}%)")
 
         global_stats["valid_windows"] += total_windows
 
