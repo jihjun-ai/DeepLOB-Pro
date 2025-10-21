@@ -565,10 +565,13 @@ def sliding_windows_v6(
     respect_day_boundary = config.get('respect_day_boundary', True)
     ffill_quality_threshold = config.get('ffill_quality_threshold', 0.5)  # A.2: 新增品質閾值
 
+    slide_step = config.get('data', {}).get('slide_step', 1)
+
     logging.info(f"\n{'='*60}")
     logging.info(f"V6 滑窗流程開始，共 {len(preprocessed_data)} 個 symbol-day 組合")
     logging.info(f"日界線保護: {'啟用' if respect_day_boundary else '禁用'}")
     logging.info(f"滑窗品質過濾: ffill 占比 > {ffill_quality_threshold*100:.0f}% 將被跳過")
+    logging.info(f"滑窗步長: {slide_step} (步長越大，重疊越少，洩漏風險越低)")
     logging.info(f"{'='*60}")
 
     # 步驟 1: 重組為股票序列
@@ -604,23 +607,91 @@ def sliding_windows_v6(
 
     logging.info(f"有效股票: {len(valid_stocks)} 檔")
 
-    # 步驟 3: 按股票切分 70/15/15
-    import random
-    SPLIT_SEED = config.get('split', {}).get('seed', 42)
-    random.Random(SPLIT_SEED).shuffle(valid_stocks)
+    # 步驟 3: 按時間切分（避免未來資訊洩漏）
+    split_method = config.get('split', {}).get('method', 'random')
 
-    n_stocks = len(valid_stocks)
-    n_train = max(1, int(n_stocks * config['split']['train_ratio']))
-    n_val = max(1, int(n_stocks * config['split']['val_ratio']))
+    if split_method == 'temporal':
+        # 時間序列切分：按日期切分
+        train_days = config['split']['train_days']
+        val_days = config['split']['val_days']
+        test_days = config['split']['test_days']
 
-    train_stocks = valid_stocks[:n_train]
-    val_stocks = valid_stocks[n_train:n_train + n_val]
-    test_stocks = valid_stocks[n_train + n_val:]
+        # 提取所有唯一日期並排序
+        all_dates = set()
+        for sym, n_points, day_data_sorted in valid_stocks:
+            for date, features, mids, bucket_mask in day_data_sorted:
+                all_dates.add(date)
 
-    logging.info(f"\n資料切分（按股票數）:")
-    logging.info(f"  Train: {len(train_stocks)} 檔")
-    logging.info(f"  Val:   {len(val_stocks)} 檔")
-    logging.info(f"  Test:  {len(test_stocks)} 檔")
+        sorted_dates = sorted(list(all_dates))
+        total_days = len(sorted_dates)
+
+        logging.info(f"\n時間序列切分:")
+        logging.info(f"  總天數: {total_days}")
+        logging.info(f"  配置: train={train_days}, val={val_days}, test={test_days}")
+
+        if total_days < train_days + val_days + test_days:
+            logging.warning(f"⚠️ 總天數不足！總計 {total_days} 天，但配置需要 {train_days + val_days + test_days} 天")
+            # 自動調整
+            train_days = max(1, int(total_days * 0.7))
+            val_days = max(1, int(total_days * 0.2))
+            test_days = total_days - train_days - val_days
+            logging.warning(f"   自動調整為: train={train_days}, val={val_days}, test={test_days}")
+
+        # 切分日期
+        train_date_set = set(sorted_dates[:train_days])
+        val_date_set = set(sorted_dates[train_days:train_days + val_days])
+        test_date_set = set(sorted_dates[train_days + val_days:train_days + val_days + test_days])
+
+        logging.info(f"  訓練日期: {sorted_dates[0]} ~ {sorted_dates[train_days-1]}")
+        logging.info(f"  驗證日期: {sorted_dates[train_days]} ~ {sorted_dates[train_days + val_days - 1]}")
+        logging.info(f"  測試日期: {sorted_dates[train_days + val_days]} ~ {sorted_dates[train_days + val_days + test_days - 1]}")
+
+        # 將股票分配到不同集合（按日期過濾）
+        train_stocks = []
+        val_stocks = []
+        test_stocks = []
+
+        for sym, n_points, day_data_sorted in valid_stocks:
+            # 每個股票可能出現在多個集合中（不同日期）
+            train_day_data = [(date, features, mids, mask) for date, features, mids, mask in day_data_sorted if date in train_date_set]
+            val_day_data = [(date, features, mids, mask) for date, features, mids, mask in day_data_sorted if date in val_date_set]
+            test_day_data = [(date, features, mids, mask) for date, features, mids, mask in day_data_sorted if date in test_date_set]
+
+            if train_day_data:
+                train_points = sum(f.shape[0] for _, f, _, _ in train_day_data)
+                train_stocks.append((sym, train_points, train_day_data))
+
+            if val_day_data:
+                val_points = sum(f.shape[0] for _, f, _, _ in val_day_data)
+                val_stocks.append((sym, val_points, val_day_data))
+
+            if test_day_data:
+                test_points = sum(f.shape[0] for _, f, _, _ in test_day_data)
+                test_stocks.append((sym, test_points, test_day_data))
+
+        logging.info(f"\n資料切分結果:")
+        logging.info(f"  Train: {len(train_stocks)} 個 symbol-day 組合")
+        logging.info(f"  Val:   {len(val_stocks)} 個 symbol-day 組合")
+        logging.info(f"  Test:  {len(test_stocks)} 個 symbol-day 組合")
+
+    else:
+        # 隨機切分：按股票數切分（舊方法）
+        import random
+        SPLIT_SEED = config.get('split', {}).get('seed', 42)
+        random.Random(SPLIT_SEED).shuffle(valid_stocks)
+
+        n_stocks = len(valid_stocks)
+        n_train = max(1, int(n_stocks * config['split']['train_ratio']))
+        n_val = max(1, int(n_stocks * config['split']['val_ratio']))
+
+        train_stocks = valid_stocks[:n_train]
+        val_stocks = valid_stocks[n_train:n_train + n_val]
+        test_stocks = valid_stocks[n_train + n_val:]
+
+        logging.info(f"\n資料切分（按股票數）:")
+        logging.info(f"  Train: {len(train_stocks)} 檔")
+        logging.info(f"  Val:   {len(val_stocks)} 檔")
+        logging.info(f"  Test:  {len(test_stocks)} 檔")
 
     splits = {
         'train': train_stocks,
@@ -796,7 +867,8 @@ def sliding_windows_v6(
                     if reason[0] in tb_stats:
                         tb_stats[reason[0]] += reason[1]
 
-                # 7. 滑窗生成
+                # 7. 滑窗生成（支持步長控制）
+                slide_step = config.get('data', {}).get('slide_step', 1)
                 T = Xn.shape[0]
                 max_t = min(T, len(y_tb))
 
@@ -805,7 +877,8 @@ def sliding_windows_v6(
 
                 day_windows = 0
 
-                for t in range(SEQ_LEN - 1, max_t):
+                # 使用步長控制滑窗重疊（減少洩漏）
+                for t in range(SEQ_LEN - 1, max_t, slide_step):
                     window_start = t - SEQ_LEN + 1
 
                     if respect_day_boundary and window_start < 0:
@@ -952,14 +1025,21 @@ def sliding_windows_v6(
         "data_quality": global_stats,
 
         "data_split": {
-            "method": "by_stock_count",
-            "seed": SPLIT_SEED,  # 新增：記錄隨機種子（可復現性）
+            "method": split_method,
+            "seed": config.get('split', {}).get('seed', 42) if split_method == 'random' else None,
+            "train_days": config['split']['train_days'] if split_method == 'temporal' else None,
+            "val_days": config['split']['val_days'] if split_method == 'temporal' else None,
+            "test_days": config['split']['test_days'] if split_method == 'temporal' else None,
+            "train_date_range": f"{sorted_dates[0]} ~ {sorted_dates[train_days-1]}" if split_method == 'temporal' else None,
+            "val_date_range": f"{sorted_dates[train_days]} ~ {sorted_dates[train_days + val_days - 1]}" if split_method == 'temporal' else None,
+            "test_date_range": f"{sorted_dates[train_days + val_days]} ~ {sorted_dates[train_days + val_days + test_days - 1]}" if split_method == 'temporal' else None,
             "train_stocks": len(train_stocks),
             "val_stocks": len(val_stocks),
             "test_stocks": len(test_stocks),
             "total_stocks": len(valid_stocks),
             "filtered_stocks": filtered_stocks,
-            "results": results
+            "results": results,
+            "note": "時間序列切分避免未來資訊洩漏" if split_method == 'temporal' else "隨機切分可能有洩漏風險"
         },
 
         "note": "V6: 基於預處理 NPZ，動態過濾閾值。Labels: {0:下跌, 1:持平, 2:上漲}",
