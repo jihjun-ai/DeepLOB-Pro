@@ -7,6 +7,12 @@ scripts\batch_preprocess.bat
 **目的**: 從 NPZ 生成訓練數據（已修復 bfill 洩漏）
 python scripts\extract_tw_stock_data_v6.py --preprocessed-dir data\preprocessed_v5_1hz --output-dir data\processed_v6 --config configs\config_pro_v5_ml_optimal.yaml
 
+##檢查資料健康度
+python scripts\data_health_check.py --train-npz data\processed_v6\npz\stock_embedding_train.npz --val-npz data\processed_v6\npz\stock_embedding_val.npz --test-npz data\processed_v6\npz\stock_embedding_test.npz --output-dir data\processed_v6\health_check
+
+###穩定性驗證（必要條件 4）⭐ **最關鍵
+python scripts\stability_check.py --preprocessed-dir data\preprocessed_v5_1hz --output-dir data\stability_check --train-window 6    --test-window 2 --step 4
+
 
 
 
@@ -22,8 +28,7 @@ python scripts/extract_tw_stock_data_v5.py --config configs/config_pro_v5_ml_opt
 python diagnose_weights_emergency.py 
 
 
-##檢查資料健康度
-python scripts/check_data_health_v5.py --data-dir ./data/processed_v5_fixed/npz --save-report --plot --verbose
+
 
 
 

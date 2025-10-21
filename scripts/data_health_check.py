@@ -594,10 +594,32 @@ def run_health_check(
 
     report['overall_pass'] = all_pass
 
-    # 保存報告
+    # 保存報告（轉換 NumPy 類型）
     json_path = os.path.join(output_dir, 'health_check_report.json')
+
+    def convert_numpy_types(obj):
+        """遞歸轉換 NumPy 類型為 Python 原生類型"""
+        if isinstance(obj, dict):
+            return {key: convert_numpy_types(value) for key, value in obj.items()}
+        elif isinstance(obj, list):
+            return [convert_numpy_types(item) for item in obj]
+        elif isinstance(obj, np.bool_):
+            return bool(obj)
+        elif isinstance(obj, (np.int_, np.intc, np.intp, np.int8,
+                             np.int16, np.int32, np.int64, np.uint8,
+                             np.uint16, np.uint32, np.uint64)):
+            return int(obj)
+        elif isinstance(obj, (np.float_, np.float16, np.float32, np.float64)):
+            return float(obj)
+        elif isinstance(obj, np.ndarray):
+            return obj.tolist()
+        else:
+            return obj
+
+    report_serializable = convert_numpy_types(report)
+
     with open(json_path, 'w', encoding='utf-8') as f:
-        json.dump(report, f, indent=2, ensure_ascii=False)
+        json.dump(report_serializable, f, indent=2, ensure_ascii=False)
 
     logging.info(f"\n報告已保存: {json_path}")
 

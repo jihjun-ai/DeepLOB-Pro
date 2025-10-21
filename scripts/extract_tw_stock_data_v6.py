@@ -277,49 +277,110 @@ def make_sample_weight(ret: pd.Series,
     return pd.Series(w, index=y.index)
 
 
-def zscore_fit(X: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
+def zscore_fit(X: np.ndarray, method: str = 'global', window: int = 100, min_periods: int = 20) -> Tuple[np.ndarray, np.ndarray]:
     """
-    計算 Z-Score 參數
+    計算 Z-Score 參數（支持多種標準化方法）
 
-    ⚠️ 注意：當前使用全訓練集統計量
-    ---------------------------------------------------------
-    假設：訓練期間統計量穩定（適用於中短期訓練）
+    Parameters:
+    -----------
+    X : np.ndarray, shape (n_samples, n_features)
+        輸入特徵
+    method : str
+        標準化方法：
+        - 'global': 全局統計量（舊方法，可能導致分布漂移）
+        - 'rolling_zscore': 滾動窗口 Z-Score（推薦，適應市場變化）
+    window : int
+        滾動窗口大小（僅 rolling_zscore 使用）
+    min_periods : int
+        最小有效樣本數（僅 rolling_zscore 使用）
 
-    更安全的替代方案（Expanding Window）:
-    見 docs/DATA_QUALITY_IMPROVEMENT_GUIDE.md 改進方案 C
+    Returns:
+    --------
+    mu, sd : 均值和標準差（global 方法）或 None, None（rolling 方法）
 
-    def expanding_zscore(features_by_day):
-        '''使用 Expanding Window（只用過去數據）'''
-        normalized = []
-        for i, day_features in enumerate(features_by_day):
-            if i == 0:
-                mu = day_features.mean(axis=0)
-                sd = day_features.std(axis=0)
+    Notes:
+    ------
+    - 全局方法：使用整個訓練集統計量（快速但可能漂移）
+    - 滾動方法：使用最近 N 個樣本統計量（穩定但稍慢）
+    """
+    if method == 'global':
+        # 原有的全局標準化
+        mu = X.mean(axis=0)
+        sd = X.std(axis=0, ddof=0)
+        sd = np.where(sd < 1e-8, 1.0, sd)
+
+        if np.any(np.abs(mu) > 1e6):
+            logging.warning(f"偵測到異常大的均值: max|μ|={np.max(np.abs(mu)):.2f}")
+
+        return mu, sd
+
+    elif method == 'rolling_zscore':
+        # 滾動窗口標準化不需要預先計算統計量
+        # 統計量在 zscore_apply 中實時計算
+        logging.info(f"使用滾動窗口標準化: window={window}, min_periods={min_periods}")
+        return None, None
+
+    else:
+        raise ValueError(f"未知的標準化方法: {method}")
+
+
+def zscore_apply(X: np.ndarray, mu: np.ndarray, sd: np.ndarray,
+                 method: str = 'global', window: int = 100, min_periods: int = 20) -> np.ndarray:
+    """
+    應用 Z-Score 正規化
+
+    Parameters:
+    -----------
+    X : np.ndarray, shape (n_samples, n_features)
+        輸入特徵
+    mu : np.ndarray or None
+        均值（global 方法）或 None（rolling 方法）
+    sd : np.ndarray or None
+        標準差（global 方法）或 None（rolling 方法）
+    method : str
+        標準化方法
+    window : int
+        滾動窗口大小
+    min_periods : int
+        最小有效樣本數
+
+    Returns:
+    --------
+    normalized : np.ndarray
+        標準化後的特徵
+    """
+    if method == 'global':
+        # 全局標準化
+        return (X - mu.reshape(1, -1)) / sd.reshape(1, -1)
+
+    elif method == 'rolling_zscore':
+        # 滾動窗口標準化
+        n_samples, n_features = X.shape
+        normalized = np.zeros_like(X)
+
+        for i in range(n_samples):
+            # 確定滾動窗口範圍
+            start_idx = max(0, i - window + 1)
+            window_data = X[start_idx:i+1, :]
+
+            # 計算當前窗口的統計量
+            if len(window_data) >= min_periods:
+                mu_rolling = window_data.mean(axis=0)
+                sd_rolling = window_data.std(axis=0, ddof=0)
+                sd_rolling = np.where(sd_rolling < 1e-8, 1.0, sd_rolling)
             else:
-                # 只用 ≤ i-1 天的統計量
-                past_features = np.concatenate(features_by_day[:i], axis=0)
-                mu = past_features.mean(axis=0)
-                sd = past_features.std(axis=0)
+                # warm-up 期：使用 expanding window
+                mu_rolling = window_data.mean(axis=0)
+                sd_rolling = window_data.std(axis=0, ddof=0)
+                sd_rolling = np.where(sd_rolling < 1e-8, 1.0, sd_rolling)
 
-            normalized.append((day_features - mu) / sd)
+            # 標準化當前樣本
+            normalized[i, :] = (X[i, :] - mu_rolling) / sd_rolling
+
         return normalized
 
-    當前保留簡單版本，建議監控 PSI 檢測分布漂移。
-    ---------------------------------------------------------
-    """
-    mu = X.mean(axis=0)
-    sd = X.std(axis=0, ddof=0)
-    sd = np.where(sd < 1e-8, 1.0, sd)
-
-    if np.any(np.abs(mu) > 1e6):
-        logging.warning(f"偵測到異常大的均值: max|μ|={np.max(np.abs(mu)):.2f}")
-
-    return mu, sd
-
-
-def zscore_apply(X: np.ndarray, mu: np.ndarray, sd: np.ndarray) -> np.ndarray:
-    """應用 Z-Score 正規化"""
-    return (X - mu.reshape(1, -1)) / sd.reshape(1, -1)
+    else:
+        raise ValueError(f"未知的標準化方法: {method}")
 
 
 # ============================================================
@@ -572,6 +633,17 @@ def sliding_windows_v6(
     logging.info("計算 Z-Score 參數（基於訓練集）")
     logging.info(f"{'='*60}")
 
+    # 讀取標準化配置
+    norm_config = config.get('normalization', {})
+    norm_method = norm_config.get('method', 'global')
+    norm_window = norm_config.get('window', 100)
+    norm_min_periods = norm_config.get('min_periods', 20)
+
+    logging.info(f"標準化方法: {norm_method}")
+    if norm_method == 'rolling_zscore':
+        logging.info(f"  - 滾動窗口: {norm_window}")
+        logging.info(f"  - 最小樣本: {norm_min_periods}")
+
     train_X_list = []
     for sym, n_points, day_data_sorted in train_stocks:
         for date, features, mids, bucket_mask in day_data_sorted:
@@ -584,7 +656,7 @@ def sliding_windows_v6(
         sd = np.ones((20,), dtype=np.float64)
         logging.warning("訓練集為空，使用預設參數")
     else:
-        mu, sd = zscore_fit(Xtr)
+        mu, sd = zscore_fit(Xtr, method=norm_method, window=norm_window, min_periods=norm_min_periods)
         logging.info(f"訓練集大小: {Xtr.shape[0]:,} 個時間點")
 
     # 步驟 5: 產生滑窗樣本
@@ -612,7 +684,7 @@ def sliding_windows_v6(
                 total_days += 1
 
                 # 1. Z-Score 正規化
-                Xn = zscore_apply(features, mu, sd)
+                Xn = zscore_apply(features, mu, sd, method=norm_method, window=norm_window, min_periods=norm_min_periods)
 
                 # 2. 波動率估計
                 close = pd.Series(mids, name='close')
@@ -868,10 +940,13 @@ def sliding_windows_v6(
         },
 
         "normalization": {
-            "method": "zscore",
-            "computed_on": "train_set",
-            "feature_means": mu.tolist(),
-            "feature_stds": sd.tolist()
+            "method": norm_method,
+            "window": norm_window if norm_method == 'rolling_zscore' else None,
+            "min_periods": norm_min_periods if norm_method == 'rolling_zscore' else None,
+            "computed_on": "train_set" if norm_method == 'global' else "rolling_window",
+            "feature_means": mu.tolist() if mu is not None else None,
+            "feature_stds": sd.tolist() if sd is not None else None,
+            "note": "滾動窗口標準化不保存全局統計量" if norm_method == 'rolling_zscore' else None
         },
 
         "data_quality": global_stats,
