@@ -112,37 +112,17 @@ output:
 data:
   aggregation_factor: 10  # 10 事件聚合
   seq_len: 100            # 100 timesteps（DeepLOB 標準）
-  slide_step: 10          # 滑窗步長（減少重疊，避免洩漏）⭐ NEW
-  # 說明：
-  #   - slide_step=1: 步長 1（99% 重疊，可能洩漏）
-  #   - slide_step=10: 步長 10（90% 重疊減少，降低洩漏）
-  #   - slide_step=100: 步長 100（無重疊，但樣本數大幅減少）
-  #   - 推薦值：10（平衡洩漏風險與樣本數）
   alpha: 0.002            # 保留（兼容性）
   horizons: [1, 2, 3, 5, 10]
   trading_start: 90000    # 09:00:00
   trading_end: 133000     # 13:30:00
 
-# 資料切分（時間序列切分，避免未來資訊洩漏）
+# 資料切分（按股票隨機切分，避免分布偏移）
 split:
-  method: 'temporal'  # 'temporal' 或 'random'
-  # temporal: 按時間切分（推薦，避免洩漏）
-  # random: 按股票隨機切分（舊方法，可能洩漏）
-
-  # 時間序列切分設定（method='temporal' 時使用）
-  train_days: 7       # 前 7 天訓練
-  val_days: 2         # 中間 2 天驗證
-  test_days: 1        # 最後 1 天測試
-  # 說明：
-  #   - 10 天總數據 → 7/2/1 切分
-  #   - 完全避免時間洩漏（用過去預測未來）
-  #   - 符合實際交易場景
-
-  # 隨機切分設定（method='random' 時使用）
-  train_ratio: 0.7    # 70% 訓練（按股票數）
-  val_ratio: 0.15     # 15% 驗證
-  test_ratio: 0.15    # 15% 測試
-  seed: 42            # 隨機種子（確保可復現性）
+  train_ratio: 0.7   # 70% 訓練
+  val_ratio: 0.15    # 15% 驗證
+  test_ratio: 0.15   # 15% 測試
+  seed: 42           # 隨機種子（確保可復現性）
 
 # ===================================================================
 # 預期效果（修正後）

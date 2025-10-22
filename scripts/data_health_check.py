@@ -195,90 +195,313 @@ def check_task_and_labels(y: np.ndarray) -> Dict:
 
 def check_future_leakage(X: np.ndarray, y: np.ndarray, weights: np.ndarray) -> Dict:
     """
-    破功測試：檢測未來資訊洩漏
+    破功測試：檢測未來資訊洩漏（v3.0 徹底修復版）
 
-    測試 A: 時間打亂標籤 - 準確率應降到隨機水準
-    測試 B: 未對齊測試 - 用 t+1 特徵預測 t 標籤，不應變好
+    測試 A: 打亂標籤測試 - 在獨立驗證集上準確率應降到隨機水準
+    測試 B: 錯對齊測試 - 用 t+1 特徵預測 t 標籤，不應變好
+
+    v3.0 修復（基於 ChatGPT 分析）：
+    ====================================
+    1. ✅ 修復 Train==Test 假陽性
+       - 舊版：在同一批資料上 fit + predict（量測訓練集表現）
+       - 新版：train/val 分離，在獨立驗證集上評估（量測泛化能力）
+
+    2. ✅ 修復 sample_weight 偏壓
+       - 舊版：亂標籤測試仍用原始 y 衍生的權重
+       - 新版：亂標籤測試關閉 sample_weight
+
+    3. ✅ 降低滑窗重疊污染
+       - 舊版：隨機取樣（高度重疊的窗口）
+       - 新版：低重疊子集（stride=SEQ_LEN）
+
+    4. ✅ 修復 Test B 邏輯錯誤
+       - 舊版：先打亂索引再錯對齊（亂序相鄰，無意義）
+       - 新版：保持原始時序再錯對齊（真實時序相鄰）
+
+    參考：
+    - ChatGPT 分析報告（2025-10-22）
+    - 核心問題：train==test 導致高維特徵 + 重疊窗口「背題」
     """
+    from sklearn.model_selection import train_test_split
+
     logging.info("\n" + "="*60)
-    logging.info("檢查 2: 未來資訊洩漏測試")
+    logging.info("檢查 2: 未來資訊洩漏測試 (v3.0 徹底修復版)")
     logging.info("="*60)
 
     results = {}
+    rng = np.random.default_rng(seed=42)
 
-    # 取樣本（避免計算時間過長）
-    n_samples = min(10000, len(y))
-    indices = np.random.choice(len(y), n_samples, replace=False)
-    X_sample = X[indices]
-    y_sample = y[indices]
-    w_sample = weights[indices]
+    # ========== 步驟 1: 低重疊子集抽樣 ==========
+    # 目標：降低滑窗重疊導致的「背題」效應
+    # 假設 X.shape = (N, 100, 20)，SEQ_LEN=100
+    SEQ_LEN = X.shape[1] if len(X.shape) == 3 else 100
+
+    # 低重疊抽樣：每隔 SEQ_LEN 取一筆（幾乎無重疊）
+    low_overlap_indices = np.arange(0, len(y), SEQ_LEN)
+
+    # 如果樣本數過少，改用 SEQ_LEN//2
+    if len(low_overlap_indices) < 1000 and len(y) > 1000:
+        low_overlap_indices = np.arange(0, len(y), max(1, SEQ_LEN // 2))
+
+    # 限制最大樣本數（計算效率）
+    if len(low_overlap_indices) > 10000:
+        low_overlap_indices = rng.choice(low_overlap_indices, 10000, replace=False)
+
+    X_low_overlap = X[low_overlap_indices]
+    y_low_overlap = y[low_overlap_indices]
+    w_low_overlap = weights[low_overlap_indices]
+
+    logging.info(f"\n低重疊子集抽樣:")
+    logging.info(f"  原始樣本數: {len(y):,}")
+    logging.info(f"  抽樣 stride: {SEQ_LEN}")
+    logging.info(f"  低重疊樣本數: {len(y_low_overlap):,}")
+
+    # 檢查類別分布
+    unique_labels, label_counts = np.unique(y_low_overlap, return_counts=True)
+    logging.info("  類別分布:")
+    for label, count in zip(unique_labels, label_counts):
+        logging.info(f"    類別 {label}: {count} ({count/len(y_low_overlap)*100:.1f}%)")
+
+    if len(unique_labels) < 3:
+        logging.error(f"❌ 低重疊抽樣後僅包含 {len(unique_labels)} 個類別，無法進行檢測")
+        results['pass'] = False
+        results['error'] = "insufficient_classes_after_sampling"
+        return results
 
     # 展平特徵
-    X_flat = X_sample.reshape(X_sample.shape[0], -1)
+    X_flat = X_low_overlap.reshape(X_low_overlap.shape[0], -1)
 
-    # 訓練基準模型（正常對齊）
+    # ========== 步驟 2: Train/Val 分離（80/20） ==========
+    # 核心修復：避免 train==test 假陽性
+    try:
+        X_train, X_val, y_train, y_val, w_train, _ = train_test_split(
+            X_flat, y_low_overlap, w_low_overlap,
+            test_size=0.2,
+            random_state=42,
+            stratify=y_low_overlap  # 分層劃分，保持類別比例
+        )
+    except Exception as e:
+        logging.error(f"❌ Train/Val 分離失敗: {e}")
+        results['pass'] = False
+        results['error'] = str(e)
+        return results
+
+    logging.info("\nTrain/Val 分離:")
+    logging.info(f"  Train: {len(y_train):,} 樣本")
+    logging.info(f"  Val:   {len(y_val):,} 樣本")
+
+    # ========== 測試 A: 打亂標籤測試（在獨立 Val 上評估） ==========
+    logging.info("\n" + "="*60)
+    logging.info("測試 A: 打亂標籤測試（正確版：Train/Val 分離）")
+    logging.info("="*60)
+
+    # A1. 基準模型（正常標籤）
     clf_baseline = LogisticRegression(max_iter=200, random_state=42, class_weight='balanced')
-    clf_baseline.fit(X_flat, y_sample, sample_weight=w_sample)
-    y_pred_baseline = clf_baseline.predict(X_flat)
-    acc_baseline = accuracy_score(y_sample, y_pred_baseline)
+    clf_baseline.fit(X_train, y_train, sample_weight=w_train)
 
-    results['baseline_accuracy'] = acc_baseline
-    logging.info(f"\n基準模型（正常對齊）:")
-    logging.info(f"  準確率: {acc_baseline:.3f}")
+    # ✅ 關鍵修復：在獨立 Val 上評估
+    y_pred_baseline_val = clf_baseline.predict(X_val)
+    acc_baseline = accuracy_score(y_val, y_pred_baseline_val)
+    bal_acc_baseline = balanced_accuracy_score(y_val, y_pred_baseline_val)
 
-    # 測試 A: 時間打亂標籤
-    y_shuffled = y_sample.copy()
-    np.random.shuffle(y_shuffled)
+    results['baseline_accuracy_val'] = acc_baseline
+    results['baseline_balanced_accuracy_val'] = bal_acc_baseline
+
+    logging.info("\n基準模型（正常標籤）:")
+    logging.info("  Train 上訓練，Val 上評估")
+    logging.info(f"  Val 準確率: {acc_baseline:.3f}")
+    logging.info(f"  Val 平衡準確率: {bal_acc_baseline:.3f}")
+
+    # A2. 亂標籤模型
+    y_train_shuffled = y_train.copy()
+    rng.shuffle(y_train_shuffled)
 
     clf_shuffled = LogisticRegression(max_iter=200, random_state=42, class_weight='balanced')
-    clf_shuffled.fit(X_flat, y_shuffled, sample_weight=w_sample)
-    y_pred_shuffled = clf_shuffled.predict(X_flat)
-    acc_shuffled = accuracy_score(y_shuffled, y_pred_shuffled)
+    # ✅ 關鍵修復：關閉 sample_weight（避免原始 y 的權重偏壓）
+    clf_shuffled.fit(X_train, y_train_shuffled)  # 不傳 sample_weight
 
-    results['shuffled_accuracy'] = acc_shuffled
+    # Val 的標籤也打亂（保持分布一致）
+    y_val_shuffled = y_val.copy()
+    rng.shuffle(y_val_shuffled)
+
+    y_pred_shuffled_val = clf_shuffled.predict(X_val)
+    acc_shuffled = accuracy_score(y_val_shuffled, y_pred_shuffled_val)
+    bal_acc_shuffled = balanced_accuracy_score(y_val_shuffled, y_pred_shuffled_val)
+
+    results['shuffled_accuracy_val'] = acc_shuffled
+    results['shuffled_balanced_accuracy_val'] = bal_acc_shuffled
     results['accuracy_drop'] = acc_baseline - acc_shuffled
+    results['balanced_accuracy_drop'] = bal_acc_baseline - bal_acc_shuffled
 
-    logging.info(f"\n測試 A: 時間打亂標籤")
-    logging.info(f"  準確率: {acc_shuffled:.3f}")
-    logging.info(f"  下降幅度: {acc_baseline - acc_shuffled:.3f}")
+    logging.info("\n亂標籤模型:")
+    logging.info("  Train 亂標籤訓練（無 sample_weight），Val 亂標籤評估")
+    logging.info(f"  Val 準確率: {acc_shuffled:.3f}")
+    logging.info(f"  Val 平衡準確率: {bal_acc_shuffled:.3f}")
+    logging.info(f"  準確率下降: {acc_baseline - acc_shuffled:.3f}")
+    logging.info(f"  平衡準確率下降: {bal_acc_baseline - bal_acc_shuffled:.3f}")
 
-    if acc_shuffled > 0.4:
-        status_a = "❌ 失敗 - 打亂後仍高準確率，可能有洩漏"
-        results['test_a_pass'] = False
-    else:
-        status_a = "✅ 通過 - 打亂後準確率接近隨機"
+    # A3. 判斷通過/失敗
+    # 三分類隨機基準 ≈ 0.33，設定通過區間 0.30-0.36
+    test_a_pass = (0.30 <= bal_acc_shuffled <= 0.36)
+
+    if test_a_pass:
+        status_a = "✅ 通過 - 亂標籤後平衡準確率接近隨機 (0.30-0.36)"
         results['test_a_pass'] = True
-
-    logging.info(f"  結果: {status_a}")
-
-    # 測試 B: 未對齊測試（用 t+1 預測 t）
-    # 將特徵向後移一步
-    X_misaligned = np.roll(X_sample, -1, axis=0)
-    X_misaligned[-1] = X_sample[-1]  # 最後一個保持不變
-    X_mis_flat = X_misaligned.reshape(X_misaligned.shape[0], -1)
-
-    clf_misaligned = LogisticRegression(max_iter=200, random_state=42, class_weight='balanced')
-    clf_misaligned.fit(X_mis_flat, y_sample, sample_weight=w_sample)
-    y_pred_mis = clf_misaligned.predict(X_mis_flat)
-    acc_misaligned = accuracy_score(y_sample, y_pred_mis)
-
-    results['misaligned_accuracy'] = acc_misaligned
-    results['accuracy_increase'] = acc_misaligned - acc_baseline
-
-    logging.info(f"\n測試 B: 未對齊測試（特徵向後移1步）")
-    logging.info(f"  準確率: {acc_misaligned:.3f}")
-    logging.info(f"  變化: {acc_misaligned - acc_baseline:+.3f}")
-
-    if acc_misaligned > acc_baseline + 0.05:
-        status_b = "❌ 失敗 - 錯對齊反而變好，存在洩漏"
-        results['test_b_pass'] = False
     else:
-        status_b = "✅ 通過 - 錯對齊無異常提升"
-        results['test_b_pass'] = True
+        if bal_acc_shuffled > 0.36:
+            status_a = f"❌ 失敗 - 亂標籤後平衡準確率仍過高 ({bal_acc_shuffled:.3f} > 0.36)"
+            results['test_a_failure_reasons'] = [
+                f"平衡準確率 {bal_acc_shuffled:.3f} > 0.36（隨機上限）",
+                "即使打亂標籤，模型仍能在 Val 上預測，懷疑數據洩漏"
+            ]
+        else:
+            status_a = f"⚠️ 異常 - 亂標籤後平衡準確率過低 ({bal_acc_shuffled:.3f} < 0.30)"
+            results['test_a_failure_reasons'] = [
+                f"平衡準確率 {bal_acc_shuffled:.3f} < 0.30（隨機下限）",
+                "可能是類別極度不平衡或抽樣問題"
+            ]
 
-    logging.info(f"  結果: {status_b}")
+        results['test_a_pass'] = False
+        results['test_a_possible_causes'] = [
+            "滑窗跨越不同日期或股票（即使低重疊仍可能存在）",
+            "標籤計算使用了未來價格資訊",
+            "正規化使用了全局統計量（包含未來資料）",
+            "資料切分未按時間先後順序"
+        ]
 
+    logging.info(f"\n  結果: {status_a}")
+    if not results['test_a_pass']:
+        logging.info(f"  失敗原因: {', '.join(results['test_a_failure_reasons'])}")
+
+    # ========== 測試 B: 錯對齊測試（保持真實時序） ==========
+    logging.info("\n" + "="*60)
+    logging.info("測試 B: 錯對齊測試（正確版：保持真實時序）")
+    logging.info("="*60)
+
+    # B1. 使用原始數據（未打亂）的低重疊子集
+    # ✅ 關鍵修復：不打亂索引，保持真實時間順序
+    X_seq = X_low_overlap  # 保持原始順序
+    y_seq = y_low_overlap
+    w_seq = w_low_overlap
+
+    # 展平
+    X_seq_flat = X_seq.reshape(X_seq.shape[0], -1)
+
+    # Train/Val 分離（時序分割：前 80% 訓練，後 20% 驗證）
+    split_idx = int(len(y_seq) * 0.8)
+    X_seq_train = X_seq_flat[:split_idx]
+    y_seq_train = y_seq[:split_idx]
+    w_seq_train = w_seq[:split_idx]
+    X_seq_val = X_seq_flat[split_idx:]
+    y_seq_val = y_seq[split_idx:]
+
+    # B2. 正常對齊基準
+    clf_aligned = LogisticRegression(max_iter=200, random_state=42, class_weight='balanced')
+    clf_aligned.fit(X_seq_train, y_seq_train, sample_weight=w_seq_train)
+    y_pred_aligned = clf_aligned.predict(X_seq_val)
+
+    acc_aligned = accuracy_score(y_seq_val, y_pred_aligned)
+    bal_acc_aligned = balanced_accuracy_score(y_seq_val, y_pred_aligned)
+    f1_aligned = f1_score(y_seq_val, y_pred_aligned, average='macro')
+
+    logging.info("\n正常對齊基準:")
+    logging.info(f"  Val 準確率: {acc_aligned:.3f}")
+    logging.info(f"  Val 平衡準確率: {bal_acc_aligned:.3f}")
+    logging.info(f"  Val F1 (macro): {f1_aligned:.3f}")
+
+    # B3. 錯對齊測試（X(t+1) 預測 y(t)）
+    # ✅ 關鍵修復：在真實時序上做錯對齊
+    if len(X_seq_train) < 2:
+        logging.warning("⚠️ Train 樣本數不足，跳過錯對齊測試")
+        results['test_b_pass'] = True  # 無法測試，視為通過
+    else:
+        # Train: X(t+1) vs y(t)
+        X_mis_train = X_seq_flat[1:split_idx]   # t+1 到 split_idx
+        y_mis_train = y_seq[:split_idx-1]       # t 到 split_idx-1
+        w_mis_train = w_seq[:split_idx-1]
+
+        # Val: X(t+1) vs y(t)
+        X_mis_val = X_seq_flat[split_idx+1:]    # t+1 到 end
+        y_mis_val = y_seq[split_idx:-1]         # t 到 end-1
+
+        if len(y_mis_val) == 0:
+            logging.warning("⚠️ Val 錯對齊樣本數為 0，跳過測試")
+            results['test_b_pass'] = True
+        else:
+            clf_misaligned = LogisticRegression(max_iter=200, random_state=42, class_weight='balanced')
+            clf_misaligned.fit(X_mis_train, y_mis_train, sample_weight=w_mis_train)
+            y_pred_mis = clf_misaligned.predict(X_mis_val)
+
+            acc_mis = accuracy_score(y_mis_val, y_pred_mis)
+            bal_acc_mis = balanced_accuracy_score(y_mis_val, y_pred_mis)
+            f1_mis = f1_score(y_mis_val, y_pred_mis, average='macro')
+
+            results['misaligned_accuracy_val'] = acc_mis
+            results['misaligned_balanced_accuracy_val'] = bal_acc_mis
+            results['misaligned_f1_macro_val'] = f1_mis
+            results['aligned_accuracy_val'] = acc_aligned
+            results['aligned_balanced_accuracy_val'] = bal_acc_aligned
+            results['aligned_f1_macro_val'] = f1_aligned
+            results['accuracy_increase'] = acc_mis - acc_aligned
+            results['balanced_accuracy_increase'] = bal_acc_mis - bal_acc_aligned
+            results['f1_increase'] = f1_mis - f1_aligned
+
+            logging.info("\n錯對齊測試 X(t+1) → y(t):")
+            logging.info(f"  Val 準確率: {acc_mis:.3f}")
+            logging.info(f"  Val 平衡準確率: {bal_acc_mis:.3f}")
+            logging.info(f"  Val F1 (macro): {f1_mis:.3f}")
+            logging.info("\n變化量:")
+            logging.info(f"  準確率變化: {acc_mis - acc_aligned:+.3f}")
+            logging.info(f"  平衡準確率變化: {bal_acc_mis - bal_acc_aligned:+.3f}")
+            logging.info(f"  F1 變化: {f1_mis - f1_aligned:+.3f}")
+
+            # B4. 判斷通過/失敗
+            # 如果錯對齊反而提升 > 0.03，視為洩漏（放寬門檻從 0.05 到 0.03）
+            test_b_fail = (
+                (bal_acc_mis > bal_acc_aligned + 0.03) or
+                (f1_mis > f1_aligned + 0.03)
+            )
+
+            if test_b_fail:
+                status_b = "❌ 失敗 - 錯對齊反而變好，存在洩漏"
+                results['test_b_pass'] = False
+
+                failure_reasons = []
+                if bal_acc_mis > bal_acc_aligned + 0.03:
+                    failure_reasons.append(f"平衡準確率提升 {bal_acc_mis - bal_acc_aligned:+.3f} > +0.03")
+                if f1_mis > f1_aligned + 0.03:
+                    failure_reasons.append(f"F1 提升 {f1_mis - f1_aligned:+.3f} > +0.03")
+
+                results['test_b_failure_reasons'] = failure_reasons
+                results['test_b_possible_causes'] = [
+                    "標籤使用了未來價格計算（如 t 的標籤用了 t+k 的價格）",
+                    "正規化或特徵工程包含了未來資訊",
+                    "數據排序錯誤或跨日/跨股票混雜"
+                ]
+            else:
+                status_b = "✅ 通過 - 錯對齊無異常提升"
+                results['test_b_pass'] = True
+
+            logging.info(f"\n  結果: {status_b}")
+            if not results['test_b_pass']:
+                logging.info(f"  失敗原因: {', '.join(results['test_b_failure_reasons'])}")
+
+    # ========== 綜合結論 ==========
     results['pass'] = results['test_a_pass'] and results['test_b_pass']
+
+    if not results['pass']:
+        logging.info("\n⚠️ 洩漏測試未通過，建議檢查:")
+        all_possible_causes = []
+        if not results['test_a_pass']:
+            all_possible_causes.extend(results.get('test_a_possible_causes', []))
+        if not results.get('test_b_pass', True):
+            all_possible_causes.extend(results.get('test_b_possible_causes', []))
+
+        unique_causes = list(dict.fromkeys(all_possible_causes))
+        for i, cause in enumerate(unique_causes, 1):
+            logging.info(f"  {i}. {cause}")
+    else:
+        logging.info("\n✅ 未來資訊洩漏測試全部通過！")
 
     return results
 

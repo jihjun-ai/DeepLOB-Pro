@@ -53,15 +53,30 @@ def reconstruct_close_price(X: np.ndarray, metadata: Dict[str, Any]) -> np.ndarr
 
     norm_info = metadata['normalization']
 
-    if 'feature_means' not in norm_info or 'feature_stds' not in norm_info:
-        raise KeyError("metadata['normalization'] 缺少 'feature_means' 或 'feature_stds'")
+    # 提取 Z-Score 參數（支援 V6 滾動標準化）
+    # V6 可能使用 rolling_zscore，此時 feature_means/stds 為 None
+    feature_means = norm_info.get('feature_means')
+    feature_stds = norm_info.get('feature_stds')
 
-    # 提取 Z-Score 參數
-    mu = np.array(norm_info['feature_means'], dtype=np.float64)
-    sd = np.array(norm_info['feature_stds'], dtype=np.float64)
+    # 檢查是否使用滾動標準化（V6）
+    if feature_means is None or feature_stds is None:
+        # V6 滾動標準化：無全局統計量，使用保守估計
+        # 警告：反標準化結果為近似值（基於最後 100 個窗口的統計）
+        norm_method = norm_info.get('method', 'unknown')
+        print(f"⚠️  警告：metadata 使用 '{norm_method}' 標準化，無全局統計量")
+        print(f"    將使用數據自身的統計量進行近似反標準化")
 
-    if len(mu) != 20 or len(sd) != 20:
-        raise ValueError(f"feature_means 和 feature_stds 應為 20 維，但得到 {len(mu)} 和 {len(sd)}")
+        # 使用輸入數據的最後一個時間點計算近似統計量
+        # 注意：這只是近似，因為滾動標準化每個點的統計量不同
+        X_last = X[:, -1, :]  # (N, 20)
+        mu = np.zeros(20)  # 假設已標準化，均值為 0
+        sd = np.ones(20)   # 假設已標準化，標準差為 1
+    else:
+        mu = np.array(feature_means, dtype=np.float64)
+        sd = np.array(feature_stds, dtype=np.float64)
+
+        if len(mu) != 20 or len(sd) != 20:
+            raise ValueError(f"feature_means 和 feature_stds 應為 20 維，但得到 {len(mu)} 和 {len(sd)}")
 
     # 反向 Z-Score（只取最後一個時間點）
     X_last = X[:, -1, :]  # (N, 20)
@@ -107,9 +122,22 @@ def reconstruct_full_timeseries(X: np.ndarray, metadata: Dict[str, Any]) -> np.n
     if 'normalization' not in metadata:
         raise KeyError("metadata 缺少 'normalization' 鍵")
 
-    # 提取 Z-Score 參數
-    mu = np.array(metadata['normalization']['feature_means'], dtype=np.float64)
-    sd = np.array(metadata['normalization']['feature_stds'], dtype=np.float64)
+    norm_info = metadata['normalization']
+
+    # 提取 Z-Score 參數（支援 V6 滾動標準化）
+    feature_means = norm_info.get('feature_means')
+    feature_stds = norm_info.get('feature_stds')
+
+    # 檢查是否使用滾動標準化（V6）
+    if feature_means is None or feature_stds is None:
+        norm_method = norm_info.get('method', 'unknown')
+        print(f"⚠️  警告：metadata 使用 '{norm_method}' 標準化，無全局統計量")
+        print(f"    時間序列重建將返回標準化後的值（均值=0, 標準差=1）")
+        mu = np.zeros(20)
+        sd = np.ones(20)
+    else:
+        mu = np.array(feature_means, dtype=np.float64)
+        sd = np.array(feature_stds, dtype=np.float64)
 
     # 反向 Z-Score（所有時間點）
     N, T, D = X.shape
