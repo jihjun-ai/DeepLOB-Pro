@@ -45,7 +45,7 @@ data:
     expected_values: [-1, 0, 1]  # y_raw 的期望值
 
   # 样本权重
-  use_sample_weights: true  # 启用逐样本权重
+  use_sample_weights: false  # 启用逐样本权重
   weights_normalize: "mean_to_1"  # 权重均值归一（或 "none"）
 
   # Stock IDs（可选，用于泛化测试）
@@ -62,7 +62,7 @@ dataloader:
 
   # 平衡采样器（暫時關閉，避免過度擬合少數類）
   balance_sampler:
-    enabled: true    # 關閉！改用 class_weights 處理不平衡
+    enabled: false    # 關閉！改用 class_weights 處理不平衡
     strategy: "inv_freq"  # 逆频率采样
 
 # ==================== 模型配置 ====================
@@ -100,7 +100,7 @@ loss:
   type: "ce"  # CrossEntropy（train_v5.py 目前只支持 ce）
 
   # 类别权重（自動處理不平衡）
-  class_weights: "auto"  # "auto"（逆频率）或 "none"
+  class_weights: "none"  # "auto"（逆频率）或 "none"
 
   # 标签平滑（關閉，不平衡時有害）
   label_smoothing:

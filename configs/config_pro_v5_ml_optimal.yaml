@@ -84,7 +84,7 @@ triple_barrier:
 
 # 樣本權重（幫助模型學習困難樣本）
 sample_weights:
-  enabled: true        # 啟用權重
+  enabled: false        # 啟用權重
   tau: 80.0            # 時間衰減（稍快，強調近期數據）
   return_scaling: 1.0  # 🔧 縮放係數（搭配 use_log_scale）
   balance_classes: true # 類別平衡（自動補償不平衡）
