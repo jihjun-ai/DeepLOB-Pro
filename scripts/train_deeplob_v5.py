@@ -952,14 +952,18 @@ def main():
         logger.info("RTX 5090 專屬優化")
         logger.info("=" * 70)
 
-        # 1. 啟用 TF32 (Ampere 架構以上) - 正確的 API
-        torch.backends.cuda.matmul.allow_tf32 = True
-        torch.backends.cudnn.allow_tf32 = True
+        # 1. 啟用 TF32 (PyTorch 2.9+ 新 API)
         try:
-            torch.set_float32_matmul_precision("high")  # PyTorch 2.0+
+            # PyTorch 2.9+ 新 API（推薦）
+            torch.backends.cudnn.conv.fp32_precision = 'tf32'
+            torch.backends.cuda.matmul.fp32_precision = 'tf32'
+            logger.info("✅ TF32 已啟用（新 API：cudnn.conv + matmul = tf32）")
         except AttributeError:
-            pass  # PyTorch < 2.0 沒有這個 API
-        logger.info("✅ TF32 已啟用（allow_tf32=True + 高精度 matmul）")
+            # PyTorch 2.0-2.8 舊 API（兼容性）
+            torch.backends.cuda.matmul.allow_tf32 = True
+            torch.backends.cudnn.allow_tf32 = True
+            torch.set_float32_matmul_precision("high")
+            logger.info("✅ TF32 已啟用（舊 API：allow_tf32 + high precision）")
 
         # 2. 啟用 cudnn benchmark（固定輸入大小）
         torch.backends.cudnn.benchmark = True

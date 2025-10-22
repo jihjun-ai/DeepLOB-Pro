@@ -56,8 +56,8 @@ data:
 
 # ==================== DataLoader 配置 ====================
 dataloader:
-  batch_size: 256  # 增大 batch（256→512，穩定梯度估計）
-  num_workers: 4  # 自动调整
+  batch_size: 2048  # 增大 batch（256→2048，直接大 batch 訓練，BatchNorm 更穩定）
+  num_workers: 12  # 增加 workers（4→12，餵飽 RTX 5090）
   pin_memory: true
 
   # 平衡采样器（暫時關閉，避免過度擬合少數類）
@@ -78,9 +78,9 @@ model:
   conv1_filters: 32
   conv2_filters: 32
   conv3_filters: 32
-  lstm_hidden_size: 32  # 大幅縮小（48→32，控制過擬合）
-  fc_hidden_size: 32    # 大幅縮小（48→32，控制過擬合）
-  dropout: 0.6  # 提高正則化（0.3→0.5，對抗過擬合）
+  lstm_hidden_size: 32  # 保持小模型（控制過擬合）
+  fc_hidden_size: 32    # 保持小模型（控制過擬合）
+  dropout: 0.7  # 進一步增加 dropout（0.6→0.7，對抗嚴重過擬合）
 
   # Stock Embeddings（当 data.use_stock_ids=true 生效）
   embeddings:
@@ -110,11 +110,11 @@ loss:
 # ==================== 优化器配置 ====================
 optim:
   name: "adamw"
-  lr: 0.0001    # 大幅降低學習率（0.0001→0.00005，對抗梯度爆炸）
-  weight_decay: 0.001  # 提高權重衰減（0.0001→0.0005，增強正則化）
-  grad_clip: 1.0  # 強力裁剪（1.0→0.5，控制 grad norm 爆炸）
-  amp: false  # 混合精度训练（關閉：BF16導致LSTM梯度NaN）
-  use_bf16: false  # RTX 5090 原生支持 BF16（關閉：數值不穩定）
+  lr: 0.0002    # 大幅降低學習率（0.0008→0.0002，對抗過擬合）
+  weight_decay: 0.001  # 增加權重衰減（0.0005→0.001，增強正則化）
+  grad_clip: 1.0  # 保持梯度裁剪
+  amp: false  # 關閉混合精度（LSTM + 大 batch 會導致梯度 NaN）
+  use_bf16: false  # 關閉 BF16
 
   # AdamW 额外参数
   betas: [0.9, 0.999]
@@ -124,18 +124,18 @@ optim:
 # ==================== 学习率调度器 ====================
 sched:
   name: "cosine"  # cosine warmup + decay
-  warmup_ratio: 0.15  # 延長預熱（0.1→0.15，給梯度更多穩定時間）
-  eta_min: 5.0e-6  # 降低最小LR（1e-5→5e-6，允許更多fine-tune）
+  warmup_ratio: 0.1  # 增加預熱（0.05→0.1，給模型更多穩定時間）
+  eta_min: 1.0e-5  # 提高最小 LR（5e-6→1e-5，避免過度 fine-tune）
 
 # ==================== 训练配置 ====================
 train:
-  epochs: 20  # 延長訓練（30→40，小LR需更多epochs）
-  accumulate_steps: 1  # 梯度累积
+  epochs: 30  # 大 batch 需更多 epochs（20→30，補償步數減少）
+  accumulate_steps: 1  # 無梯度累積（直接使用 batch_size=2048）
 
   # 早停
   early_stop:
     metric: "val.f1_macro_weighted"  # 以加权 macro-F1 为准
-    patience: 5  # 縮短耐心（10→8，快速止損過擬合）
+    patience: 8  # 大 batch 增加耐心（5→8，收斂較平滑需更多時間）
     mode: "max"
 
 # ==================== 评估配置 ====================
@@ -207,10 +207,11 @@ safety_checks:
 # ==================== 硬件配置 ====================
 hardware:
   device: "cuda"
-  num_workers: 4
+  num_workers: 12  # 與 dataloader 一致
   pin_memory: true
-  prefetch_factor: 2
+  prefetch_factor: 4  # 增加預取（2→4，減少 GPU 等待）
   persistent_workers: true
+  enable_tf32: true  # 啟用 TF32（RTX 5090 加速 50%）
 
 # ==================== 續訓配置 ====================
 resume:

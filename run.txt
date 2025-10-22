@@ -12,7 +12,7 @@ python scripts\stability_check.py --preprocessed-dir data\preprocessed_v5_1hz --
 **目的**: 從 NPZ 生成訓練數據（已修復 bfill 洩漏）
 python scripts\extract_tw_stock_data_v6.py --preprocessed-dir data\preprocessed_v5_1hz --output-dir data\processed_v6 --config configs\config_pro_v5_ml_optimal.yaml
 
-python scripts\extract_tw_stock_data_v6.py --preprocessed-dir .\data\preprocessed_v5_1hz --output-dir .\data\processed_v6_balanced --config   .\configs\config_pro_v5_ml_optimal.yaml
+python scripts\extract_tw_stock_data_v6.py --preprocessed-dir .\data\preprocessed_v5_1hz --output-dir .\data\processed_v6 --config   .\configs\config_pro_v5_ml_optimal.yaml
 
 
 ##檢查資料健康度
@@ -20,7 +20,7 @@ python scripts\data_health_check.py --train-npz data\processed_v6\npz\stock_embe
 
 ### 訓練模型
 python scripts\train_deeplob_v5.py --config configs\train_v5.yaml --data-dir data\processed_v6\npz
-python scripts\train_deeplob_v5.py --config configs\train_v5.yaml --data-dir data\processed_v6_balanced\npz
+
 
 
 
