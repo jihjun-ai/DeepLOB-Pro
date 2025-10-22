@@ -56,8 +56,8 @@ data:
 
 # ==================== DataLoader 配置 ====================
 dataloader:
-  batch_size: 2048  # 增大 batch（256→2048，直接大 batch 訓練，BatchNorm 更穩定）
-  num_workers: 12  # 增加 workers（4→12，餵飽 RTX 5090）
+  batch_size: 512  # 實驗 3：大幅降低（2048→512，給模型更多梯度雜訊）
+  num_workers: 12  # 保持高 workers（餵飽 GPU）
   pin_memory: true
 
   # 平衡采样器（暫時關閉，避免過度擬合少數類）
@@ -110,10 +110,10 @@ loss:
 # ==================== 优化器配置 ====================
 optim:
   name: "adamw"
-  lr: 0.0002    # 大幅降低學習率（0.0008→0.0002，對抗過擬合）
-  weight_decay: 0.001  # 增加權重衰減（0.0005→0.001，增強正則化）
-  grad_clip: 1.0  # 保持梯度裁剪
-  amp: false  # 關閉混合精度（LSTM + 大 batch 會導致梯度 NaN）
+  lr: 0.00005    # 實驗 3：配合小 batch（0.0002→0.00005，batch 降 4 倍 lr 也降 4 倍）
+  weight_decay: 0.001  # 保持強正則化（實驗 2 有效）
+  grad_clip: 1.0  # 保持梯度裁剪（監控 Grad Norm 避免 >4）
+  amp: false  # 關閉混合精度（LSTM + 小 batch 仍可能不穩定）
   use_bf16: false  # 關閉 BF16
 
   # AdamW 额外参数
@@ -123,19 +123,19 @@ optim:
 
 # ==================== 学习率调度器 ====================
 sched:
-  name: "cosine"  # cosine warmup + decay
-  warmup_ratio: 0.1  # 增加預熱（0.05→0.1，給模型更多穩定時間）
-  eta_min: 1.0e-5  # 提高最小 LR（5e-6→1e-5，避免過度 fine-tune）
+  name: "cosine"  # 保持 cosine（比 warm_restarts 更穩定）
+  warmup_ratio: 0.15  # 實驗 3：增加預熱（小 batch 需更多穩定期）
+  eta_min: 5.0e-6  # 最小 LR 為初始 lr 的 1/10
 
 # ==================== 训练配置 ====================
 train:
-  epochs: 30  # 大 batch 需更多 epochs（20→30，補償步數減少）
-  accumulate_steps: 1  # 無梯度累積（直接使用 batch_size=2048）
+  epochs: 50  # 實驗 3：小 batch 需更多 epochs（30→50，補償步數）
+  accumulate_steps: 1  # 無梯度累積
 
   # 早停
   early_stop:
     metric: "val.f1_macro_weighted"  # 以加权 macro-F1 为准
-    patience: 8  # 大 batch 增加耐心（5→8，收斂較平滑需更多時間）
+    patience: 3  # 實驗 3：縮短耐心（8→3，快速止損過擬合）
     mode: "max"
 
 # ==================== 评估配置 ====================
