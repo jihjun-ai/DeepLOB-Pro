@@ -56,13 +56,13 @@ data:
 
 # ==================== DataLoader 配置 ====================
 dataloader:
-  batch_size: 512  # 增大 batch（256→512，穩定梯度估計）
+  batch_size: 256  # 增大 batch（256→512，穩定梯度估計）
   num_workers: 4  # 自动调整
   pin_memory: true
 
   # 平衡采样器（暫時關閉，避免過度擬合少數類）
   balance_sampler:
-    enabled: false  # 關閉！改用 class_weights 處理不平衡
+    enabled: true    # 關閉！改用 class_weights 處理不平衡
     strategy: "inv_freq"  # 逆频率采样
 
 # ==================== 模型配置 ====================
@@ -80,7 +80,7 @@ model:
   conv3_filters: 32
   lstm_hidden_size: 32  # 大幅縮小（48→32，控制過擬合）
   fc_hidden_size: 32    # 大幅縮小（48→32，控制過擬合）
-  dropout: 0.5  # 提高正則化（0.3→0.5，對抗過擬合）
+  dropout: 0.6  # 提高正則化（0.3→0.5，對抗過擬合）
 
   # Stock Embeddings（当 data.use_stock_ids=true 生效）
   embeddings:
@@ -110,9 +110,9 @@ loss:
 # ==================== 优化器配置 ====================
 optim:
   name: "adamw"
-  lr: 0.00005  # 大幅降低學習率（0.0001→0.00005，對抗梯度爆炸）
-  weight_decay: 0.0005  # 提高權重衰減（0.0001→0.0005，增強正則化）
-  grad_clip: 0.5  # 強力裁剪（1.0→0.5，控制 grad norm 爆炸）
+  lr: 0.0001    # 大幅降低學習率（0.0001→0.00005，對抗梯度爆炸）
+  weight_decay: 0.001  # 提高權重衰減（0.0001→0.0005，增強正則化）
+  grad_clip: 1.0  # 強力裁剪（1.0→0.5，控制 grad norm 爆炸）
   amp: false  # 混合精度训练（關閉：BF16導致LSTM梯度NaN）
   use_bf16: false  # RTX 5090 原生支持 BF16（關閉：數值不穩定）
 
@@ -129,13 +129,13 @@ sched:
 
 # ==================== 训练配置 ====================
 train:
-  epochs: 40  # 延長訓練（30→40，小LR需更多epochs）
+  epochs: 20  # 延長訓練（30→40，小LR需更多epochs）
   accumulate_steps: 1  # 梯度累积
 
   # 早停
   early_stop:
     metric: "val.f1_macro_weighted"  # 以加权 macro-F1 为准
-    patience: 8  # 縮短耐心（10→8，快速止損過擬合）
+    patience: 5  # 縮短耐心（10→8，快速止損過擬合）
     mode: "max"
 
 # ==================== 评估配置 ====================
