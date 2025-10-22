@@ -186,9 +186,16 @@ def simple_tb_labels(close: pd.Series, vol: pd.Series,
     return pd.Series(labels, index=close.index)
 
 
-def extract_features_labels(day_data: List[Tuple], seq_len: int = 100) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+def extract_features_labels(day_data: List[Tuple], seq_len: int = 100,
+                           stride: int = 10, max_samples_per_stock: int = 500) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
     """
-    從單日數據提取特徵和標籤
+    從單日數據提取特徵和標籤（優化版：降採樣 + 進度顯示）
+
+    Args:
+        day_data: 單日數據列表
+        seq_len: 序列長度
+        stride: 滑窗步長（優化：每 stride 個點取一個樣本）
+        max_samples_per_stock: 每個股票最多取樣數（避免單股樣本過多）
 
     Returns:
         X: (N, seq_len, 20)
@@ -199,7 +206,16 @@ def extract_features_labels(day_data: List[Tuple], seq_len: int = 100) -> Tuple[
     y_list = []
     stock_list = []
 
+    total_stocks = len(day_data)
+    processed = 0
+
     for symbol, features, mids, meta in day_data:
+        processed += 1
+
+        # 每處理 20 個股票顯示一次進度
+        if processed % 20 == 0 or processed == total_stocks:
+            logging.info(f"    處理進度: {processed}/{total_stocks} 股票 ({processed/total_stocks*100:.1f}%)")
+
         close = pd.Series(mids, name='close')
 
         # 波動率
@@ -208,20 +224,25 @@ def extract_features_labels(day_data: List[Tuple], seq_len: int = 100) -> Tuple[
         except:
             continue
 
-        # 標籤
+        # 標籤（簡化版 TB，減少計算量）
         try:
-            y_labels = simple_tb_labels(close, vol)
+            y_labels = simple_tb_labels(close, vol, max_holding=40)  # 降低 max_holding
         except:
             continue
 
-        # 滑窗
+        # 滑窗（優化：每 stride 個點取一個樣本）
         T = features.shape[0]
         max_t = min(T, len(y_labels))
 
         if max_t < seq_len:
             continue
 
-        for t in range(seq_len - 1, max_t):
+        stock_samples = 0
+
+        for t in range(seq_len - 1, max_t, stride):  # 優化：使用 stride
+            if stock_samples >= max_samples_per_stock:  # 限制單股樣本數
+                break
+
             window_start = t - seq_len + 1
             window = features[window_start:t + 1, :]
 
@@ -236,6 +257,7 @@ def extract_features_labels(day_data: List[Tuple], seq_len: int = 100) -> Tuple[
             X_list.append(window.astype(np.float32))
             y_list.append(label)
             stock_list.append(symbol)
+            stock_samples += 1
 
     if X_list:
         X = np.stack(X_list, axis=0)
@@ -311,6 +333,7 @@ def rolling_backtest(
         for date in train_dates:
             train_data.extend(data_by_date[date])
 
+        logging.info(f"  提取訓練特徵（{len(train_data)} 個 stock-day）...")
         X_train, y_train, stock_train = extract_features_labels(train_data, seq_len)
 
         if len(X_train) < 100:
@@ -322,6 +345,7 @@ def rolling_backtest(
         for date in test_dates:
             test_data.extend(data_by_date[date])
 
+        logging.info(f"  提取測試特徵（{len(test_data)} 個 stock-day）...")
         X_test, y_test, stock_test = extract_features_labels(test_data, seq_len)
 
         if len(X_test) < 50:

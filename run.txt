@@ -2,6 +2,11 @@ conda activate deeplob-pro
 
 scripts\batch_preprocess.bat
 
+
+###穩定性驗證
+python scripts\stability_check.py --preprocessed-dir data\preprocessed_v5_1hz --output-dir data\stability_check --train-window 6    --test-window 2 --step 4
+
+
 步驟 2: 生成訓練數據（已修復洩漏 ✅）
 
 **目的**: 從 NPZ 生成訓練數據（已修復 bfill 洩漏）
@@ -10,8 +15,7 @@ python scripts\extract_tw_stock_data_v6.py --preprocessed-dir data\preprocessed_
 ##檢查資料健康度
 python scripts\data_health_check.py --train-npz data\processed_v6\npz\stock_embedding_train.npz --val-npz data\processed_v6\npz\stock_embedding_val.npz --test-npz data\processed_v6\npz\stock_embedding_test.npz --output-dir data\processed_v6\health_check
 
-###穩定性驗證（必要條件 4）⭐ **最關鍵
-python scripts\stability_check.py --preprocessed-dir data\preprocessed_v5_1hz --output-dir data\stability_check --train-window 6    --test-window 2 --step 4
+
 
 
 
