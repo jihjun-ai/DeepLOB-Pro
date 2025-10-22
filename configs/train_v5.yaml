@@ -110,10 +110,10 @@ loss:
 # ==================== 优化器配置 ====================
 optim:
   name: "adamw"
-  lr: 0.00005    # 實驗 3：配合小 batch（0.0002→0.00005，batch 降 4 倍 lr 也降 4 倍）
-  weight_decay: 0.001  # 保持強正則化（實驗 2 有效）
-  grad_clip: 1.0  # 保持梯度裁剪（監控 Grad Norm 避免 >4）
-  amp: false  # 關閉混合精度（LSTM + 小 batch 仍可能不穩定）
+  lr: 0.00002    # 實驗 4：極低學習率（5e-5→2e-5，對抗 Grad Norm 爆炸）
+  weight_decay: 0.001  # 保持強正則化
+  grad_clip: 1.0  # 保持梯度裁剪
+  amp: false  # 關閉混合精度
   use_bf16: false  # 關閉 BF16
 
   # AdamW 额外参数
@@ -124,18 +124,18 @@ optim:
 # ==================== 学习率调度器 ====================
 sched:
   name: "cosine"  # 保持 cosine（比 warm_restarts 更穩定）
-  warmup_ratio: 0.15  # 實驗 3：增加預熱（小 batch 需更多穩定期）
-  eta_min: 5.0e-6  # 最小 LR 為初始 lr 的 1/10
+  warmup_ratio: 0.20  # 實驗 4：增加預熱（0.15→0.20，極低 lr 需更多穩定）
+  eta_min: 2.0e-6  # 最小 LR 為初始 lr 的 1/10
 
 # ==================== 训练配置 ====================
 train:
-  epochs: 50  # 實驗 3：小 batch 需更多 epochs（30→50，補償步數）
+  epochs: 100  # 實驗 4：極低 lr 需更多 epochs（50→100，補償慢收斂）
   accumulate_steps: 1  # 無梯度累積
 
   # 早停
   early_stop:
     metric: "val.f1_macro_weighted"  # 以加权 macro-F1 为准
-    patience: 3  # 實驗 3：縮短耐心（8→3，快速止損過擬合）
+    patience: 5  # 實驗 4：增加耐心（3→5，極低 lr 收斂慢）
     mode: "max"
 
 # ==================== 评估配置 ====================
