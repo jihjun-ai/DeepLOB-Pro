@@ -73,10 +73,10 @@ volatility:
 
 # Triple-Barrier 參數（修正版：重新校準以適應按日處理）
 triple_barrier:
-  pt_multiplier: 3.5   # 止盈：3.5σ（修正後建議值，避免日內難觸發）
-  sl_multiplier: 3.5   # 止損：3.5σ（對稱設計）
+  pt_multiplier: 2.5   # 止盈：3.5σ（修正後建議值，避免日內難觸發）
+  sl_multiplier: 2.5   # 止損：3.5σ（對稱設計）
   max_holding: 40      # 最大持有：40 bars（考慮日內限制）
-  min_return: 0.0015   # 閾值：0.15%（只用於 vertical，不影響 PT/SL）
+  min_return: 0.0025   # 閾值：0.15%（只用於 vertical，不影響 PT/SL）
   # 重要修正：
   #   1. min_return 只在「時間到」時判斷，PT/SL 固定標 ±1
   #   2. max_holding 受日界限制，不會越日

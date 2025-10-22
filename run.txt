@@ -12,8 +12,21 @@ python scripts\stability_check.py --preprocessed-dir data\preprocessed_v5_1hz --
 **目的**: 從 NPZ 生成訓練數據（已修復 bfill 洩漏）
 python scripts\extract_tw_stock_data_v6.py --preprocessed-dir data\preprocessed_v5_1hz --output-dir data\processed_v6 --config configs\config_pro_v5_ml_optimal.yaml
 
+python scripts\extract_tw_stock_data_v6.py --preprocessed-dir .\data\preprocessed_v5_1hz --output-dir .\data\processed_v6_balanced --config   .\configs\config_pro_v5_ml_optimal.yaml
+
+
 ##檢查資料健康度
 python scripts\data_health_check.py --train-npz data\processed_v6\npz\stock_embedding_train.npz --val-npz data\processed_v6\npz\stock_embedding_val.npz --test-npz data\processed_v6\npz\stock_embedding_test.npz --output-dir data\processed_v6\health_check
+
+### 訓練模型
+python scripts\train_deeplob_v5.py --config configs\train_v5.yaml --data-dir data\processed_v6\npz
+python scripts\train_deeplob_v5.py --config configs\train_v5.yaml --data-dir data\processed_v6_balanced\npz
+
+
+
+## 分析deeplob 數據
+python scripts\monitor_deeplob.py --log-dir logs/deeplob_v5
+
 
 
 
@@ -34,28 +47,8 @@ python diagnose_weights_emergency.py
 
 
 
-
-
 ###測試
 python scripts/preprocess_single_day.py --input ./data/temp/20250901.txt --output-dir ./data/preprocessed_v5_1hz --config ./configs/config_pro_v5_ml_optimal.yam
-
-
-
-
-
-# 基础训练（使用默认配置）
-python scripts/train_deeplob_v5.py --config configs/train_v5.yaml
-
-###目前最好配置
-python scripts/train_deeplob_v5.py --config configs/train_v5_fix_moderate.yaml --data-dir ./data/processed_v5_balanced/npz --epochs 40
-python scripts/train_deeplob_v5.py --config configs/train_v5_fix_moderate.yaml --data-dir ./data/processed_v5_balanced/npz --epochs 60
-python scripts/train_deeplob_v5.py --config configs/train_v5_recovery.yaml --data-dir ./data/processed_v5_balanced/npz  --epochs 50
-python scripts/train_deeplob_v5.py --config configs/train_v5_recovery.yaml --data-dir ./data/processed_v5/npz --epochs 50
-python scripts/train_deeplob_v5.py --config configs/train_v5_recovery.yaml --data-dir ./data/processed_v5_balanced/npz --epochs 50
-python scripts/train_deeplob_v5.py --config configs/train_v5_recovery_v6.yaml --data-dir ./data/processed_v5/npz --epochs 50
-python scripts/train_deeplob_v5.py --config configs/train_v5_recovery_v7.yaml --data-dir ./data/processed_v5_balanced/npz --epochs 50
-
-python scripts/train_deeplob_v5.py --config configs/train_v5_recovery.yaml --data-dir ./data/processed_v5_fixed/npz --epochs 50
 
 
 

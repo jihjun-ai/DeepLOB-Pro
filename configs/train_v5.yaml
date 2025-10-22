@@ -31,10 +31,10 @@ visualization:
 # ==================== 数据配置 ====================
 data:
   # 数据路径
-  train: "data/processed_v5/npz/stock_embedding_train.npz"
-  val: "data/processed_v5/npz/stock_embedding_val.npz"
-  test: "data/processed_v5/npz/stock_embedding_test.npz"
-  norm_meta: "data/processed_v5/npz/normalization_meta.json"
+  train: "data/processed_v6/npz/stock_embedding_train.npz"
+  val: "data/processed_v6/npz/stock_embedding_val.npz"
+  test: "data/processed_v6/npz/stock_embedding_test.npz"
+  norm_meta: "data/processed_v6/npz/normalization_meta.json"
 
   # V5 标签配置（核心）
   v5_labels: true  # y: {0,1,2}（已转换）；保留 y_raw（如果有）
