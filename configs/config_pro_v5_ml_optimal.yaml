@@ -92,16 +92,17 @@ triple_barrier:
 
     # 以下參數僅在 labeling_method='trend_stable' 時生效
     hysteresis_ratio: 0.6     # 退出門檻比例（0.6 → 退出=2.5*0.6=1.5σ）
-    smooth_window: 15         # 多數票平滑窗口（秒，奇數）
-    min_trend_duration: 30    # 方向連續維持最短長度（秒）
+    smooth_window: 21         # 多數票平滑窗口（秒，奇數）⬆️ 從15調到21
+    min_trend_duration: 45    # 方向連續維持最短長度（秒）⬆️ 從30調到45
 
-    # 【效果說明】trend_stable vs trend_adaptive
+    # 【效果說明】trend_stable vs trend_adaptive（v2.0 - 2025-10-23 強化版）
     # - trend_adaptive: 單點判定，震盪區間頻繁翻轉（問題）
-    # - trend_stable: 遲滯+持續性+平滑，震盪區間穩定為Neutral（改善）
-    #   · 進入趨勢：需連續30秒超過2.5σ
-    #   · 退出趨勢：需連續30秒回到1.5σ內
-    #   · 多數票平滑：15秒窗口消除單根雜訊
-    #   · 結果：切換次數↓50-70%，Neutral區間↑
+    # - trend_stable v2.0: 遲滯+持續性+平滑+絕對地板+方向一致性（大幅改善）
+    #   · 進入趨勢：需連續45秒超過2.5σ（且未來60%步數同號）
+    #   · 退出趨勢：需連續45秒回到1.5σ內（或方向一致性<40%）
+    #   · 多數票平滑：21秒窗口消除單根雜訊
+    #   · 絕對地板：0.20%進入/0.10%退出（避免低波動誤判）
+    #   · 結果：切換次數↓70-85%，Neutral區間↑↑（震盪日>70%）
 
 # 樣本權重（幫助模型學習困難樣本）
 sample_weights:

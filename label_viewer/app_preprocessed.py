@@ -14,12 +14,13 @@ Label Viewer - 預處理數據模式（完整版）
    - 事件數量圖 (bucket_event_count)
    - 時間桶遮罩圖 (bucket_mask)
    - 標籤預覽分布
+   - 權重策略對比 (weight_strategies) - 包含 11 種策略
    - 元數據表格
 
-支援 PREPROCESSED_DATA_SPECIFICATION.md 所有數據欄位。
+支援 PREPROCESSED_DATA_SPECIFICATION.md 所有數據欄位（含權重策略）。
 
 作者：DeepLOB-Pro Team
-版本：v4.0 完整版
+版本：v4.1 完整版（新增權重策略）
 最後更新：2025-10-23
 """
 
@@ -252,7 +253,7 @@ app.layout = html.Div([
             }
         ),
         html.P(
-            '查看 preprocess_single_day.py 產生的數據和標籤預覽 v4.0 完整版（支援所有 NPZ 欄位）',
+            '查看 preprocess_single_day.py 產生的數據和標籤預覽 v4.1（含權重策略）',
             style={
                 'textAlign': 'center',
                 'color': '#7f8c8d',
@@ -352,6 +353,7 @@ app.layout = html.Div([
                     {'label': ' 事件數量圖 (bucket_event_count)', 'value': 'bucket_event_count'},
                     {'label': ' 時間桶遮罩圖 (bucket_mask)', 'value': 'bucket_mask'},
                     {'label': ' 標籤預覽分布', 'value': 'label_preview'},
+                    {'label': ' 權重策略對比 (weight_strategies)', 'value': 'weight_strategies'},
                     {'label': ' 元數據表格', 'value': 'metadata'}
                 ],
                 value=['mids', 'label_preview', 'metadata'],
@@ -739,7 +741,137 @@ def update_single_stock_view(symbol, dir_info, display_options):
                     style={'color': '#7f8c8d', 'padding': '20px', 'fontFamily': 'Microsoft YaHei, Arial'}
                 ))
 
-        # 7. 元數據表格
+        # 7. 權重策略對比
+        if 'weight_strategies' in display_options:
+            weight_strategies = metadata.get('weight_strategies')
+
+            if weight_strategies:
+                # 創建權重策略對比圖
+                fig_weights = go.Figure()
+
+                # 準備數據
+                strategy_names = []
+                down_weights = []
+                neutral_weights = []
+                up_weights = []
+
+                # 按照策略類型排序（先 class_weight，後 focal）
+                sorted_strategies = sorted(
+                    weight_strategies.items(),
+                    key=lambda x: (x[1].get('type') == 'focal', x[0])
+                )
+
+                for strategy_name, strategy_info in sorted_strategies:
+                    # 跳過 focal_loss 類型（不是 class_weight）
+                    if strategy_info.get('type') == 'focal':
+                        continue
+
+                    class_weights = strategy_info.get('class_weights', {})
+                    strategy_names.append(strategy_name)
+                    down_weights.append(class_weights.get('-1', 1.0))
+                    neutral_weights.append(class_weights.get('0', 1.0))
+                    up_weights.append(class_weights.get('1', 1.0))
+
+                # 創建分組柱狀圖
+                fig_weights.add_trace(go.Bar(
+                    name='Down (-1)',
+                    x=strategy_names,
+                    y=down_weights,
+                    marker_color='#e74c3c',
+                    hovertemplate='%{x}<br>Down 權重: %{y:.3f}<extra></extra>'
+                ))
+
+                fig_weights.add_trace(go.Bar(
+                    name='Neutral (0)',
+                    x=strategy_names,
+                    y=neutral_weights,
+                    marker_color='#95a5a6',
+                    hovertemplate='%{x}<br>Neutral 權重: %{y:.3f}<extra></extra>'
+                ))
+
+                fig_weights.add_trace(go.Bar(
+                    name='Up (1)',
+                    x=strategy_names,
+                    y=up_weights,
+                    marker_color='#27ae60',
+                    hovertemplate='%{x}<br>Up 權重: %{y:.3f}<extra></extra>'
+                ))
+
+                fig_weights.update_layout(
+                    title=f'{symbol} - 權重策略對比（{len(strategy_names)} 種策略）',
+                    xaxis_title='策略名稱',
+                    yaxis_title='權重值',
+                    barmode='group',
+                    height=500,
+                    xaxis=dict(
+                        tickangle=-45,
+                        tickfont=dict(size=10)
+                    ),
+                    legend=dict(
+                        orientation="h",
+                        yanchor="bottom",
+                        y=1.02,
+                        xanchor="right",
+                        x=1
+                    ),
+                    font=dict(family='Microsoft YaHei, Arial')
+                )
+                charts.append(dcc.Graph(figure=fig_weights))
+
+                # 添加權重策略說明表格
+                table_data = []
+                for strategy_name, strategy_info in sorted_strategies:
+                    class_weights = strategy_info.get('class_weights', {})
+                    description = strategy_info.get('description', 'N/A')
+                    strategy_type = strategy_info.get('type', 'N/A')
+
+                    table_data.append({
+                        '策略名稱': strategy_name,
+                        '類型': strategy_type,
+                        'Down': f"{class_weights.get('-1', 1.0):.3f}" if class_weights else 'N/A',
+                        'Neutral': f"{class_weights.get('0', 1.0):.3f}" if class_weights else 'N/A',
+                        'Up': f"{class_weights.get('1', 1.0):.3f}" if class_weights else 'N/A',
+                        '說明': description
+                    })
+
+                if table_data:
+                    fig_weights_table = go.Figure(data=[go.Table(
+                        header=dict(
+                            values=['<b>策略名稱</b>', '<b>類型</b>', '<b>Down</b>', '<b>Neutral</b>', '<b>Up</b>', '<b>說明</b>'],
+                            fill_color='#3498db',
+                            font=dict(color='white', size=11, family='Microsoft YaHei, Arial'),
+                            align='left'
+                        ),
+                        cells=dict(
+                            values=[
+                                [d['策略名稱'] for d in table_data],
+                                [d['類型'] for d in table_data],
+                                [d['Down'] for d in table_data],
+                                [d['Neutral'] for d in table_data],
+                                [d['Up'] for d in table_data],
+                                [d['說明'] for d in table_data]
+                            ],
+                            fill_color='#ecf0f1',
+                            font=dict(color='#2c3e50', size=10, family='Microsoft YaHei, Arial'),
+                            align='left',
+                            height=30
+                        )
+                    )])
+
+                    fig_weights_table.update_layout(
+                        title=f'{symbol} - 權重策略詳細資訊',
+                        height=400,
+                        font=dict(family='Microsoft YaHei, Arial')
+                    )
+                    charts.append(dcc.Graph(figure=fig_weights_table))
+
+            else:
+                charts.append(html.Div(
+                    "此股票無權重策略資訊（可能是舊版 NPZ）",
+                    style={'color': '#7f8c8d', 'padding': '20px', 'fontFamily': 'Microsoft YaHei, Arial'}
+                ))
+
+        # 8. 元數據表格
         if 'metadata' in display_options:
             if metadata:
                 fig_meta = create_metadata_table(metadata)
