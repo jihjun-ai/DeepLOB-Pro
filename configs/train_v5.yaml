@@ -56,7 +56,7 @@ data:
 
 # ==================== DataLoader 配置 ====================
 dataloader:
-  batch_size: 512  # 實驗 3：大幅降低（2048→512，給模型更多梯度雜訊）
+  batch_size: 384  # 實驗 5：小降（512→384，抑制 Grad Norm 波動）
   num_workers: 12  # 保持高 workers（餵飽 GPU）
   pin_memory: true
 
@@ -110,9 +110,9 @@ loss:
 # ==================== 优化器配置 ====================
 optim:
   name: "adamw"
-  lr: 0.00002    # 實驗 4：極低學習率（5e-5→2e-5，對抗 Grad Norm 爆炸）
+  lr: 0.000004   # 實驗 6：保持 4e-6（實驗 4/5 最佳點）
   weight_decay: 0.001  # 保持強正則化
-  grad_clip: 1.0  # 保持梯度裁剪
+  grad_clip: 0.8  # 實驗 6：更嚴格梯度裁剪（1.0→0.8，控制 Grad Norm）
   amp: false  # 關閉混合精度
   use_bf16: false  # 關閉 BF16
 
@@ -123,20 +123,21 @@ optim:
 
 # ==================== 学习率调度器 ====================
 sched:
-  name: "cosine"  # 保持 cosine（比 warm_restarts 更穩定）
-  warmup_ratio: 0.20  # 實驗 4：增加預熱（0.15→0.20，極低 lr 需更多穩定）
-  eta_min: 2.0e-6  # 最小 LR 為初始 lr 的 1/10
+  name: "cosine"  # 保持 cosine（溫和衰減）
+  warmup_ratio: 0.40  # 實驗 6：延長預熱（0.30→0.40，更長穩定期）
+  eta_min: 3.0e-6  # 最小 LR（從 4e-6 降到 3e-6，避免停滯）
 
 # ==================== 训练配置 ====================
 train:
-  epochs: 100  # 實驗 4：極低 lr 需更多 epochs（50→100，補償慢收斂）
+  epochs: 30  # 實驗 5：降低 epochs（100→30，常數 LR 快速收斂）
   accumulate_steps: 1  # 無梯度累積
 
-  # 早停
+  # 早停（監控 Val F1）
   early_stop:
-    metric: "val.f1_macro_weighted"  # 以加权 macro-F1 为准
-    patience: 5  # 實驗 4：增加耐心（3→5，極低 lr 收斂慢）
+    metric: "val.f1_macro_weighted"  # 主要指標：加權 F1
+    patience: 5  # 實驗 6：提高耐心（3→5，配合 min_delta 避免空轉）
     mode: "max"
+    min_delta: 0.0008  # 實驗 6：最小改善閾值（避免在噪音中徘徊）
 
 # ==================== 评估配置 ====================
 eval:
