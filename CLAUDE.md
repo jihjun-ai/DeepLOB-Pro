@@ -297,9 +297,15 @@ python scripts\extract_tw_stock_data_v6.py \
 ```
 
 **腳本**: `scripts/extract_tw_stock_data_v6.py`
-- 讀取預處理 NPZ → Z-Score → 波動率 → Triple-Barrier
+- 讀取預處理 NPZ → Z-Score → 波動率 → **標籤生成**
+- **支持兩種標籤方法**: Triple-Barrier（高頻）/ 趨勢標籤（波段）
 - 滑窗生成樣本
 - 按股票切分 70/15/15
+
+**標籤方法選擇** ⭐⭐⭐ (2025-10-23 新增):
+- **Triple-Barrier**: 適合超短線/高頻交易（10-20次/天，0.3-0.5%利潤）
+- **趨勢標籤**: 適合日內波段交易（1-2次/天，≥1%利潤）
+- 詳見: [docs/TREND_LABELING_IMPLEMENTATION.md](docs/TREND_LABELING_IMPLEMENTATION.md)
 
 **核心改進**：
 - ✅ **動態過濾**: 每天自動調整閾值（維持目標分布）

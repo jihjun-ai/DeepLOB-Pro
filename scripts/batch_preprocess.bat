@@ -7,8 +7,8 @@ setlocal enabledelayedexpansion
 REM Configuration
 set PROJECT_ROOT=%~dp0..
 set INPUT_DIR=%PROJECT_ROOT%\data\temp
-set OUTPUT_DIR=%PROJECT_ROOT%\data\preprocessed_v5_1hz
-set CONFIG=%PROJECT_ROOT%\configs\config_pro_v5_ml_optimal.yaml
+set OUTPUT_DIR=%PROJECT_ROOT%\data\preprocessed_swing
+set CONFIG=%PROJECT_ROOT%\configs\config_intraday_swing.yaml
 set CONDA_ENV=deeplob-pro
 
 echo ============================================================

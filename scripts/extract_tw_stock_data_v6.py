@@ -53,6 +53,9 @@ if str(project_root) not in sys.path:
 
 from src.utils.yaml_manager import YAMLManager
 
+# 【新增】導入專業金融工程函數庫（2025-10-23）
+from src.utils.financial_engineering import trend_labels_adaptive
+
 # 設定版本號
 VERSION = "6.0.0"
 
@@ -226,6 +229,36 @@ def tb_labels(close: pd.Series,
     except Exception as e:
         logging.error(f"Triple-Barrier 失敗: {e}")
         raise
+
+
+def trend_labels(close: pd.Series,
+                 vol: pd.Series,
+                 lookforward: int = 150,
+                 vol_multiplier: float = 2.0) -> pd.Series:
+    """
+    趨勢標籤生成（專業版包裝函數）
+
+    【新增 2025-10-23】適用於日內波段交易：
+    - 往前看 lookforward bars（例如 150 bars ≈ 1.5-3 小時）
+    - 閾值基於波動率自適應調整
+    - 高波動期需要更大變化才算趨勢，低波動期小變化也算趨勢
+
+    Args:
+        close: 收盤價序列
+        vol: 波動率序列（用於自適應調整）
+        lookforward: 往前看的窗口大小（bars）
+        vol_multiplier: 波動率倍數（趨勢閾值 = vol × multiplier）
+                       例如 2.0 表示需要 2σ 的變化才算趨勢
+
+    Returns:
+        Series with labels: -1 (下跌), 0 (持平), 1 (上漲)
+    """
+    return trend_labels_adaptive(
+        close=close,
+        volatility=vol,
+        lookforward=lookforward,
+        vol_multiplier=vol_multiplier
+    )
 
 
 def make_sample_weight(ret: pd.Series,
@@ -747,44 +780,70 @@ def sliding_windows_v6(
                     logging.warning(f"  {sym} @ {date}: 波動率計算失敗 ({e})")
                     continue
 
-                # 3. Triple-Barrier 標籤（優化版：降採樣計算）
-                tb_cfg = config['triple_barrier']
-                # 強制開啟日界保護，避免跨日洩漏
-                day_end_idx = len(close) - 1  # 修改：始終啟用
-
-                # ⚡ 優化：每 10 個點計算一次 TB（避免重複計算）
-                # 原因：滑窗會重疊，不需要對每個點都算 TB
-                tb_stride = config.get('tb_stride', 10)  # 可配置，預設 10
+                # 3. 標籤生成（支持 Triple-Barrier 和趨勢標籤）
+                labeling_method = config.get('labeling_method', 'triple_barrier')
 
                 try:
-                    # 只對採樣點計算 TB
-                    sample_indices = list(range(0, len(close), tb_stride))
-                    if sample_indices[-1] != len(close) - 1:
-                        sample_indices.append(len(close) - 1)
+                    if labeling_method == 'trend_adaptive':
+                        # ========== 趨勢標籤方法 ==========
+                        trend_cfg = config.get('trend_labeling', {})
+                        lookforward = trend_cfg.get('lookforward', 150)
+                        vol_multiplier = trend_cfg.get('vol_multiplier', 2.0)
 
-                    close_sampled = close.iloc[sample_indices]
-                    vol_sampled = vol.iloc[sample_indices]
+                        # 計算趨勢標籤（返回 Series）
+                        y_raw = trend_labels(
+                            close=close,
+                            vol=vol,
+                            lookforward=lookforward,
+                            vol_multiplier=vol_multiplier
+                        )
 
-                    tb_df_sampled = tb_labels(
-                        close=close_sampled,
-                        vol=vol_sampled,
-                        pt_mult=tb_cfg['pt_multiplier'],
-                        sl_mult=tb_cfg['sl_multiplier'],
-                        max_holding=tb_cfg['max_holding'],
-                        min_return=tb_cfg['min_return'],
-                        day_end_idx=len(close_sampled) - 1
-                    )
+                        # 創建與 TB 兼容的 DataFrame
+                        tb_df = pd.DataFrame(index=close.index)
+                        tb_df['y'] = y_raw
+                        tb_df['ret'] = 0.0  # 趨勢標籤不需要 ret
+                        tb_df['tt'] = 0     # 趨勢標籤不需要 tt
+                        tb_df['why'] = 'trend'
+                        tb_df['up_p'] = 0.0
+                        tb_df['dn_p'] = 0.0
 
-                    # 重新索引到原始時間軸（前向填充）
-                    tb_df = pd.DataFrame(index=close.index)
-                    for col in tb_df_sampled.columns:
-                        tb_df[col] = tb_df_sampled[col].reindex(close.index, method='ffill')
+                    else:
+                        # ========== Triple-Barrier 方法（預設）==========
+                        tb_cfg = config['triple_barrier']
+                        # 強制開啟日界保護，避免跨日洩漏
+                        day_end_idx = len(close) - 1
+
+                        # ⚡ 優化：每 N 個點計算一次 TB（避免重複計算）
+                        tb_stride = config.get('tb_stride', 10)  # 可配置，預設 10
+
+                        # 只對採樣點計算 TB
+                        sample_indices = list(range(0, len(close), tb_stride))
+                        if sample_indices[-1] != len(close) - 1:
+                            sample_indices.append(len(close) - 1)
+
+                        close_sampled = close.iloc[sample_indices]
+                        vol_sampled = vol.iloc[sample_indices]
+
+                        tb_df_sampled = tb_labels(
+                            close=close_sampled,
+                            vol=vol_sampled,
+                            pt_mult=tb_cfg['pt_multiplier'],
+                            sl_mult=tb_cfg['sl_multiplier'],
+                            max_holding=tb_cfg['max_holding'],
+                            min_return=tb_cfg['min_return'],
+                            day_end_idx=len(close_sampled) - 1
+                        )
+
+                        # 重新索引到原始時間軸（前向填充）
+                        tb_df = pd.DataFrame(index=close.index)
+                        for col in tb_df_sampled.columns:
+                            tb_df[col] = tb_df_sampled[col].reindex(close.index, method='ffill')
 
                 except Exception as e:
-                    logging.warning(f"  {sym} @ {date}: TB 失敗 ({e})")
+                    logging.warning(f"  {sym} @ {date}: 標籤生成失敗 ({e})")
                     continue
 
-                # 4. 轉換標籤
+                # 4. 轉換標籤（-1/0/1 → 0/1/2）
                 y_tb = tb_df["y"].map({-1: 0, 0: 1, 1: 2})
 
                 # E.1: 標籤邊界檢查（Hard Assertion）
