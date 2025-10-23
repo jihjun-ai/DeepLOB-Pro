@@ -1,18 +1,23 @@
 # -*- coding: utf-8 -*-
 """
-preprocess_single_day.py - 單檔逐日預處理腳本（動態過濾版 + 專業金融套件）
+preprocess_single_day.py - 單檔逐日預處理腳本（僅使用 Trend Stable 標籤）
 =============================================================================
 【更新日期】2025-10-23
-【版本說明】v2.0 - 專業金融工程套件實現
+【版本說明】v2.1 - 簡化版（僅保留 Trend Stable 標籤方法）
 
 功能：
   1. 讀取單一天的 TXT 檔案
   2. 解析、清洗、聚合（繼承 V5 邏輯）
   3. 計算每個 symbol 的日內統計
   4. 【核心】動態決定當天的過濾閾值（基於目標標籤分布）
-  5. 【新】使用專業金融工程套件（pandas EWMA + NumPy 向量化）
+  5. 【標籤】僅使用 Trend Stable 標籤方法（日內波段交易）
   6. 應用過濾並保存為中間格式（NPZ）
   7. 生成當天摘要報告
+
+標籤方法：
+  ✅ Trend Stable - 穩定趨勢標籤（推薦，適合日內波段交易）
+  ❌ Triple-Barrier - 已棄用（高頻交易）
+  ❌ Trend Adaptive - 已棄用（震盪區間不穩定）
 
 輸出：
   - data/preprocessed_v5/daily/{date}/{symbol}.npz
@@ -103,10 +108,12 @@ if str(project_root) not in sys.path:
 from src.utils.yaml_manager import YAMLManager
 
 # 【新增】導入專業金融工程函數庫（2025-10-23）
+# 【2025-10-23 更新】僅保留 Trend Stable 相關函數
 from src.utils.financial_engineering import (
     ewma_volatility_professional,
-    triple_barrier_labels_professional,
-    trend_labels_adaptive,
+    # triple_barrier_labels_professional,  # 已棄用：僅保留 Trend Stable
+    # trend_labels_adaptive,               # 已棄用：僅保留 Trend Stable
+    trend_labels_stable,
     compute_sample_weights_professional
 )
 
@@ -520,102 +527,89 @@ def calculate_intraday_volatility(mids: np.ndarray, date: str, symbol: str) -> O
 
 
 # ============================================================
-# Triple-Barrier 標籤計算（專業版 - 使用金融工程套件）
+# 標籤計算包裝函數（調用專業金融工程套件）
 # ============================================================
-#
-# 【重要更新】2025-10-23
-# 現在使用專業金融工程套件實現（src/utils/financial_engineering.py）：
-#   - ewma_volatility_professional(): 使用 pandas 優化 EWMA（C 加速）
-#   - triple_barrier_labels_professional(): 向量化 TB 實現（更快）
-#   - compute_sample_weights_professional(): sklearn 類別平衡
-#
-# 優勢：
-#   1. 更好的數值穩定性（pandas C 語言實現）
-#   2. 業界標準實現（可復現性強）
-#   3. 更好的性能（向量化操作，減少 Python 循環）
-#   4. 統一的錯誤處理和驗證
-# ============================================================
-
 
 def ewma_vol(close: pd.Series, halflife: int = 60) -> pd.Series:
-    """
-    EWMA 波動率估計（專業版包裝函數）
-
-    【新】現在調用 ewma_volatility_professional()
-
-    Args:
-        close: 收盤價序列
-        halflife: EWMA 半衰期
-
-    Returns:
-        波動率序列
-    """
+    """EWMA 波動率估計 → ewma_volatility_professional()"""
     return ewma_volatility_professional(close, halflife=halflife, min_periods=20)
 
 
-def tb_labels(close: pd.Series,
-              vol: pd.Series,
-              pt_mult: float = 2.0,
-              sl_mult: float = 2.0,
-              max_holding: int = 200,
-              min_return: float = 0.0001,
-              day_end_idx: Optional[int] = None) -> pd.DataFrame:
-    """
-    Triple-Barrier 標籤生成（專業版包裝函數）
-
-    【新】現在調用 triple_barrier_labels_professional()
-
-    Args:
-        close: 收盤價序列
-        vol: 波動率序列
-        pt_mult: 止盈倍數
-        sl_mult: 止損倍數
-        max_holding: 最大持有期
-        min_return: 最小收益閾值
-        day_end_idx: 日界限制
-
-    Returns:
-        DataFrame with columns: ['ret', 'y', 'tt', 'why', 'up_p', 'dn_p']
-    """
-    return triple_barrier_labels_professional(
-        close=close,
-        volatility=vol,
-        pt_multiplier=pt_mult,
-        sl_multiplier=sl_mult,
-        max_holding=max_holding,
-        min_return=min_return,
-        day_end_idx=day_end_idx
-    )
+# ============================================================
+# 已棄用：Triple-Barrier 標籤方法（僅保留 Trend Stable）
+# ============================================================
+# def tb_labels(close: pd.Series,
+#               vol: pd.Series,
+#               pt_mult: float = 2.0,
+#               sl_mult: float = 2.0,
+#               max_holding: int = 200,
+#               min_return: float = 0.0001,
+#               day_end_idx: Optional[int] = None) -> pd.DataFrame:
+#     """Triple-Barrier 標籤生成 → triple_barrier_labels_professional()"""
+#     return triple_barrier_labels_professional(
+#         close=close,
+#         volatility=vol,
+#         pt_multiplier=pt_mult,
+#         sl_multiplier=sl_mult,
+#         max_holding=max_holding,
+#         min_return=min_return,
+#         day_end_idx=day_end_idx
+#     )
 
 
 def trend_labels(close: pd.Series,
                  vol: pd.Series,
                  lookforward: int = 150,
-                 vol_multiplier: float = 2.0) -> pd.Series:
+                 vol_multiplier: float = 2.0,
+                 use_stable: bool = True,  # 預設使用穩定版
+                 hysteresis_ratio: float = 0.6,
+                 smooth_window: int = 15,
+                 min_trend_duration: int = 30) -> pd.Series:
     """
-    趨勢標籤生成（專業版包裝函數）
+    趨勢標籤生成（僅使用穩定版 Trend Stable）
 
-    【新增 2025-10-23】適用於日內波段交易：
-    - 往前看 lookforward bars（例如 150 bars ≈ 1.5-3 小時）
-    - 閾值基於波動率自適應調整
-    - 高波動期需要更大變化才算趨勢，低波動期小變化也算趨勢
+    【2025-10-23 更新】
+    - 僅保留 Trend Stable 方法（use_stable 固定為 True）
+    - 已棄用：Triple-Barrier 和 Trend Adaptive
 
     Args:
         close: 收盤價序列
-        vol: 波動率序列（用於自適應調整）
-        lookforward: 往前看的窗口大小（bars）
-        vol_multiplier: 波動率倍數（趨勢閾值 = vol × multiplier）
-                       例如 2.0 表示需要 2σ 的變化才算趨勢
+        vol: 波動率序列
+        lookforward: 前瞻窗口（秒）
+        vol_multiplier: 趨勢門檻倍數
+        use_stable: 固定為 True（僅保留穩定版）
+        hysteresis_ratio: 退出門檻比例（0.6 = 退出門檻為進入的60%）
+        smooth_window: 多數票平滑窗口（秒，奇數）
+        min_trend_duration: 最短趨勢持續時間（秒）
 
     Returns:
-        Series with labels: -1 (下跌), 0 (持平), 1 (上漲)
+        標籤序列（-1: Down, 0: Neutral, 1: Up）
     """
-    return trend_labels_adaptive(
+    # 僅使用穩定版：減少震盪區間的頻繁翻轉
+    return trend_labels_stable(
         close=close,
         volatility=vol,
         lookforward=lookforward,
-        vol_multiplier=vol_multiplier
+        vol_multiplier=vol_multiplier,
+        hysteresis_ratio=hysteresis_ratio,
+        smooth_window=smooth_window,
+        min_trend_duration=min_trend_duration
     )
+
+# ============================================================
+# 已棄用：Trend Adaptive 方法（震盪區間不穩定）
+# ============================================================
+# def trend_labels_adaptive_wrapper(close: pd.Series,
+#                                   vol: pd.Series,
+#                                   lookforward: int = 150,
+#                                   vol_multiplier: float = 2.0) -> pd.Series:
+#     """Trend Adaptive 標籤生成（已棄用）"""
+#     return trend_labels_adaptive(
+#         close=close,
+#         volatility=vol,
+#         lookforward=lookforward,
+#         vol_multiplier=vol_multiplier
+#     )
 
 
 def compute_label_preview(
@@ -624,15 +618,16 @@ def compute_label_preview(
     return_labels: bool = False
 ) -> Optional[Dict[str, Any]]:
     """
-    計算標籤分布（支持 Triple-Barrier 和趨勢標籤）
+    計算標籤分布（僅使用 Trend Stable 標籤方法）
 
     【重要更新 2025-10-23】
-    1. 使用專業金融工程套件（pandas + NumPy + sklearn）
-    2. 新增趨勢標籤支持（適用於日內波段交易）
+    1. 僅保留 Trend Stable 標籤方法
+    2. 已棄用：Triple-Barrier 和 Trend Adaptive
+    3. 使用專業金融工程套件（pandas + NumPy + sklearn）
 
     Args:
         mids: 中間價序列
-        tb_config: 標籤配置（包含方法選擇）
+        tb_config: 標籤配置（僅讀取 trend_labeling 參數）
         return_labels: 是否返回完整標籤陣列（預設 False，只返回統計）
 
     Returns:
@@ -641,58 +636,40 @@ def compute_label_preview(
         - label_dist: {-1: ratio, 0: ratio, 1: ratio}
         - total_labels: 總標籤數
         - labels_array: 完整標籤陣列（僅當 return_labels=True）
-        - labeling_method: 使用的標籤方法
+        - labeling_method: 固定為 'trend_stable'
         - 如果計算失敗返回 None
     """
     try:
         # 轉為 Series
         close = pd.Series(mids, name='close')
 
-        # 計算波動率（兩種方法都需要）
+        # 計算波動率
         halflife = tb_config.get('ewma_halflife', 60)
         vol = ewma_vol(close, halflife=halflife)
 
-        # 檢查標籤方法（預設為 triple_barrier）
-        labeling_method = tb_config.get('labeling_method', 'triple_barrier')
+        # ========== 僅使用 Trend Stable 標籤方法 ==========
+        labeling_method = 'trend_stable'  # 固定使用 Trend Stable
 
-        if labeling_method == 'trend_adaptive':
-            # ========== 趨勢標籤方法 ==========
-            trend_config = tb_config.get('trend_labeling', {})
-            lookforward = trend_config.get('lookforward', 150)
-            vol_multiplier = trend_config.get('vol_multiplier', 2.0)
+        trend_config = tb_config.get('trend_labeling', {})
+        lookforward = trend_config.get('lookforward', 150)
+        vol_multiplier = trend_config.get('vol_multiplier', 2.0)
+        hysteresis_ratio = trend_config.get('hysteresis_ratio', 0.6)
+        smooth_window = trend_config.get('smooth_window', 15)
+        min_trend_duration = trend_config.get('min_trend_duration', 30)
 
-            # 計算趨勢標籤
-            labels_series = trend_labels(
-                close=close,
-                vol=vol,
-                lookforward=lookforward,
-                vol_multiplier=vol_multiplier
-            )
+        # 計算趨勢標籤（Trend Stable）
+        labels_series = trend_labels(
+            close=close,
+            vol=vol,
+            lookforward=lookforward,
+            vol_multiplier=vol_multiplier,
+            use_stable=True,  # 固定使用穩定版
+            hysteresis_ratio=hysteresis_ratio,
+            smooth_window=smooth_window,
+            min_trend_duration=min_trend_duration
+        )
 
-            labels_array = labels_series.values
-
-        else:
-            # ========== Triple-Barrier 方法（預設）==========
-            pt_mult = tb_config.get('pt_multiplier', tb_config.get('pt_mult', 2.0))
-            sl_mult = tb_config.get('sl_multiplier', tb_config.get('sl_mult', 2.0))
-            max_holding = tb_config.get('max_holding', 200)
-            min_return = tb_config.get('min_return', 0.0001)
-
-            # 啟用日界保護
-            day_end_idx = len(close) - 1
-
-            tb_df = tb_labels(
-                close=close,
-                vol=vol,
-                pt_mult=pt_mult,
-                sl_mult=sl_mult,
-                max_holding=max_holding,
-                min_return=min_return,
-                day_end_idx=day_end_idx
-            )
-
-            # 提取標籤（y 欄位）
-            labels_array = tb_df['y'].values
+        labels_array = labels_series.values
 
         # 統計標籤分布
         if len(labels_array) == 0:
@@ -740,140 +717,112 @@ def compute_label_preview(
 
 def compute_all_weight_strategies(labels: np.ndarray) -> Dict[str, Dict]:
     """
-    計算所有權重策略
+    計算類別權重策略（擴展版 - 提供 5 種策略）
+
+    【2025-10-23更新】提供多種權重策略供訓練時選擇
+    詳細策略請參考 src/utils/financial_engineering.py
 
     Args:
         labels: 標籤陣列 (-1, 0, 1, NaN)
 
     Returns:
-        所有權重策略的字典
-        {
-            'strategy_name': {
-                'class_weights': {-1: w1, 0: w2, 1: w3},
-                'description': '描述'
-            }
-        }
+        權重策略字典，包含 5 種策略：
+        - uniform: 無權重（全部 1.0）
+        - balanced: sklearn 標準平衡權重
+        - balanced_sqrt: 平衡權重的平方根（較溫和）
+        - inverse_freq: 反頻率權重（極端平衡）
+        - focal_alpha: Focal Loss 風格權重（強調少數類）
     """
+    from sklearn.utils.class_weight import compute_class_weight
+
     strategies = {}
 
     # 過濾 NaN
     valid_labels = labels[~np.isnan(labels)]
 
     if len(valid_labels) == 0:
-        # 沒有有效標籤，返回空策略
         return {}
 
-    # 計算類別分布
-    unique, counts = np.unique(valid_labels, return_counts=True)
+    # 計算類別頻率
+    unique_classes, counts = np.unique(valid_labels, return_counts=True)
     total = len(valid_labels)
-    n_classes = len(unique)
+    freqs = {int(cls): count / total for cls, count in zip(unique_classes, counts)}
 
-    # 確保有所有 3 個類別
-    label_counts = {-1: 0, 0: 0, 1: 0}
-    for label, count in zip(unique, counts):
-        label_counts[int(label)] = int(count)
+    # 確保包含所有類別（-1, 0, 1）
+    for label in [-1, 0, 1]:
+        if label not in freqs:
+            freqs[label] = 0.0
 
-    # ============================================================
-    # 1. Balanced (標準平衡)
-    # ============================================================
-    strategies['balanced'] = {
-        'class_weights': {
-            label: total / (n_classes * count) if count > 0 else 1.0
-            for label, count in label_counts.items()
-        },
-        'description': 'Standard balanced weights (total / (n_classes * count))'
-    }
-
-    # ============================================================
-    # 2. Square Root Balanced (平方根平衡，更溫和)
-    # ============================================================
-    balanced = strategies['balanced']['class_weights']
-    strategies['sqrt_balanced'] = {
-        'class_weights': {
-            label: np.sqrt(weight)
-            for label, weight in balanced.items()
-        },
-        'description': 'Square root of balanced weights (gentler, more stable)'
-    }
-
-    # ============================================================
-    # 3. Log Balanced (對數平衡，最溫和)
-    # ============================================================
-    strategies['log_balanced'] = {
-        'class_weights': {
-            label: np.log(total / count + 1) if count > 0 else 1.0
-            for label, count in label_counts.items()
-        },
-        'description': 'Logarithmic balanced weights (gentlest)'
-    }
-
-    # ============================================================
-    # 4. Effective Number of Samples (有效樣本數，多個 beta)
-    # ============================================================
-    for beta in [0.9, 0.99, 0.999, 0.9999]:
-        effective_weights = {}
-        for label, count in label_counts.items():
-            if count > 0:
-                effective_num = (1 - beta) / (1 - beta**count)
-                effective_weights[label] = 1.0 / effective_num
-            else:
-                effective_weights[label] = 1.0
-
-        # 正規化
-        total_weight = sum(effective_weights.values())
-        normalized_weights = {
-            k: v / total_weight * len(effective_weights)
-            for k, v in effective_weights.items()
-        }
-
-        beta_str = str(beta).replace('.', '')
-        strategies[f'effective_num_{beta_str}'] = {
-            'class_weights': normalized_weights,
-            'description': f'Effective Number of Samples (beta={beta}, CVPR 2019)'
-        }
-
-    # ============================================================
-    # 5. Class-Balanced Focal (結合 Effective Number + 難度調整)
-    # ============================================================
-    for beta in [0.99, 0.999]:
-        # 使用 Effective Number 作為基礎
-        base_weights = strategies[f'effective_num_{str(beta).replace(".", "")}']['class_weights']
-
-        # 手動設定難度係數（可根據實際觀察調整）
-        # Neutral 通常較難學習（樣本少 + 難以區分）
-        difficulty_factors = {
-            -1: 1.0,  # Down: 容易
-             0: 1.5,  # Neutral: 困難
-             1: 1.0   # Up: 容易
-        }
-
-        cb_focal_weights = {
-            label: base_weights[label] * difficulty_factors.get(label, 1.0)
-            for label in base_weights
-        }
-
-        beta_str = str(beta).replace('.', '')
-        strategies[f'cb_focal_{beta_str}'] = {
-            'class_weights': cb_focal_weights,
-            'description': f'Class-Balanced Focal Loss weights (beta={beta}, difficulty-aware)'
-        }
-
-    # ============================================================
-    # 6. Uniform (不使用權重)
-    # ============================================================
+    # ========== 策略 1: 無權重 ==========
     strategies['uniform'] = {
         'class_weights': {-1: 1.0, 0: 1.0, 1: 1.0},
-        'description': 'No weighting (all classes equal)'
+        'description': 'No weighting (all classes equal)',
+        'type': 'class_weight'
     }
 
-    # ============================================================
-    # 7. Focal Loss (記錄參數，訓練時使用)
-    # ============================================================
-    strategies['focal_loss'] = {
-        'type': 'focal',
-        'gamma': 2.0,
-        'class_weights': {-1: 1.0, 0: 1.0, 1: 1.0},
-        'description': 'Use Focal Loss (gamma=2.0) during training'
+    # ========== 策略 2: sklearn 標準平衡權重 ==========
+    class_weights_arr = compute_class_weight(
+        'balanced',
+        classes=unique_classes,
+        y=valid_labels
+    )
+    class_weights_dict = dict(zip(unique_classes.astype(int), class_weights_arr))
+
+    # 補齊缺失類別
+    for label in [-1, 0, 1]:
+        if label not in class_weights_dict:
+            class_weights_dict[label] = 1.0
+
+    strategies['balanced'] = {
+        'class_weights': class_weights_dict,
+        'description': 'Sklearn balanced weights (n_samples / (n_classes * n_samples_per_class))',
+        'type': 'class_weight'
+    }
+
+    # ========== 策略 3: 平衡權重的平方根（較溫和）==========
+    balanced_sqrt = {
+        label: np.sqrt(class_weights_dict[label])
+        for label in [-1, 0, 1]
+    }
+    # 歸一化（均值 = 1.0）
+    mean_weight = np.mean(list(balanced_sqrt.values()))
+    balanced_sqrt = {k: v / mean_weight for k, v in balanced_sqrt.items()}
+
+    strategies['balanced_sqrt'] = {
+        'class_weights': balanced_sqrt,
+        'description': 'Square root of balanced weights (milder than balanced)',
+        'type': 'class_weight'
+    }
+
+    # ========== 策略 4: 反頻率權重（極端平衡）==========
+    inverse_freq = {}
+    for label in [-1, 0, 1]:
+        if freqs[label] > 0:
+            inverse_freq[label] = 1.0 / freqs[label]
+        else:
+            inverse_freq[label] = 1.0
+
+    # 歸一化
+    mean_weight = np.mean(list(inverse_freq.values()))
+    inverse_freq = {k: v / mean_weight for k, v in inverse_freq.items()}
+
+    strategies['inverse_freq'] = {
+        'class_weights': inverse_freq,
+        'description': 'Inverse frequency (1 / freq), extreme balancing',
+        'type': 'class_weight'
+    }
+
+    # ========== 策略 5: Focal Loss 風格權重 ==========
+    # alpha = 1 - freq（少數類權重更高）
+    focal_alpha = {label: 1.0 - freqs[label] for label in [-1, 0, 1]}
+    # 歸一化
+    mean_weight = np.mean(list(focal_alpha.values()))
+    focal_alpha = {k: v / mean_weight for k, v in focal_alpha.items()}
+
+    strategies['focal_alpha'] = {
+        'class_weights': focal_alpha,
+        'description': 'Focal Loss style (alpha = 1 - freq), emphasizes minority classes',
+        'type': 'class_weight'
     }
 
     return strategies
@@ -1395,7 +1344,7 @@ def parse_args():
     p = argparse.ArgumentParser("preprocess_single_day", description="單檔逐日預處理腳本")
     p.add_argument("--input", required=True, help="輸入 TXT 檔案路徑")
     p.add_argument("--output-dir", default="./data/preprocessed_v5", help="輸出目錄")
-    p.add_argument("--config", default="./configs/config_pro_v5_ml_optimal.yaml", help="配置文件")
+    p.add_argument("--config", default="./configs/config_intraday_swing.yaml", help="配置文件")
     return p.parse_args()
 
 

@@ -73,14 +73,35 @@ volatility:
 
 # Triple-Barrier 參數（修正版：重新校準以適應按日處理）
 triple_barrier:
-  pt_multiplier: 2.5   # 止盈：3.5σ（修正後建議值，避免日內難觸發）
-  sl_multiplier: 2.5   # 止損：3.5σ（對稱設計）
+  # 標籤方法選擇：
+  #   - 'triple_barrier': 高頻交易標籤（適合短線，10-20次/天）
+  #   - 'trend_adaptive': 自適應趨勢標籤（適合波段，1-2次/天，較不穩定）
+  #   - 'trend_stable': 穩定趨勢標籤（適合波段，減少震盪區間誤判）✅ 推薦
+  labeling_method: 'trend_stable'  # 預設使用穩定版趨勢標籤
+
+  # === Triple-Barrier 參數（labeling_method='triple_barrier'） ===
+  pt_multiplier: 2.5   # 止盈：2.5σ（修正後建議值）
+  sl_multiplier: 2.5   # 止損：2.5σ（對稱設計）
   max_holding: 40      # 最大持有：40 bars（考慮日內限制）
-  min_return: 0.0025   # 閾值：0.15%（只用於 vertical，不影響 PT/SL）
-  # 重要修正：
-  #   1. min_return 只在「時間到」時判斷，PT/SL 固定標 ±1
-  #   2. max_holding 受日界限制，不會越日
-  #   3. 預期 Class 1（持平）比例會顯著增加（30-45%）
+  min_return: 0.0025   # 閾值：0.25%（只用於 vertical）
+
+  # === 趨勢標籤參數（labeling_method='trend_adaptive' or 'trend_stable'） ===
+  trend_labeling:
+    lookforward: 120          # 趨勢評估窗口（秒，1Hz數據）
+    vol_multiplier: 2.5       # 進入趨勢門檻（倍數，基於波動率）
+
+    # 以下參數僅在 labeling_method='trend_stable' 時生效
+    hysteresis_ratio: 0.6     # 退出門檻比例（0.6 → 退出=2.5*0.6=1.5σ）
+    smooth_window: 15         # 多數票平滑窗口（秒，奇數）
+    min_trend_duration: 30    # 方向連續維持最短長度（秒）
+
+    # 【效果說明】trend_stable vs trend_adaptive
+    # - trend_adaptive: 單點判定，震盪區間頻繁翻轉（問題）
+    # - trend_stable: 遲滯+持續性+平滑，震盪區間穩定為Neutral（改善）
+    #   · 進入趨勢：需連續30秒超過2.5σ
+    #   · 退出趨勢：需連續30秒回到1.5σ內
+    #   · 多數票平滑：15秒窗口消除單根雜訊
+    #   · 結果：切換次數↓50-70%，Neutral區間↑
 
 # 樣本權重（幫助模型學習困難樣本）
 sample_weights:

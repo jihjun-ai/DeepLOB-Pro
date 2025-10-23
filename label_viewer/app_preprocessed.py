@@ -1,5 +1,5 @@
 """
-Label Viewer - 預處理數據模式
+Label Viewer - 預處理數據模式（完整版）
 
 用於查看 preprocess_single_day.py 產生的預處理數據和標籤預覽。
 
@@ -7,10 +7,19 @@ Label Viewer - 預處理數據模式
 1. 輸入日期目錄路徑（例如：data/preprocessed_v5_1hz/daily/20250901）
 2. 查看該目錄下所有股票列表
 3. 選擇單一股票或「全部股票」查看整體統計
-4. 視覺化中間價（mids）和標籤預覽
+4. 視覺化所有 NPZ 數據（可通過開關選擇）：
+   - 中間價折線圖 (mids)
+   - LOB 特徵矩陣熱圖 (features)
+   - 標籤陣列視覺化 (labels)
+   - 事件數量圖 (bucket_event_count)
+   - 時間桶遮罩圖 (bucket_mask)
+   - 標籤預覽分布
+   - 元數據表格
+
+支援 PREPROCESSED_DATA_SPECIFICATION.md 所有數據欄位。
 
 作者：DeepLOB-Pro Team
-版本：v3.0 簡化版
+版本：v4.0 完整版
 最後更新：2025-10-23
 """
 
@@ -243,7 +252,7 @@ app.layout = html.Div([
             }
         ),
         html.P(
-            '查看 preprocess_single_day.py 產生的數據和標籤預覽 v3.0',
+            '查看 preprocess_single_day.py 產生的數據和標籤預覽 v4.0 完整版（支援所有 NPZ 欄位）',
             style={
                 'textAlign': 'center',
                 'color': '#7f8c8d',
@@ -337,12 +346,16 @@ app.layout = html.Div([
             dcc.Checklist(
                 id='display-options',
                 options=[
-                    {'label': ' 中間價折線圖', 'value': 'mids'},
+                    {'label': ' 中間價折線圖 (mids)', 'value': 'mids'},
+                    {'label': ' LOB 特徵矩陣 (features)', 'value': 'features'},
+                    {'label': ' 標籤陣列圖 (labels)', 'value': 'labels'},
+                    {'label': ' 事件數量圖 (bucket_event_count)', 'value': 'bucket_event_count'},
+                    {'label': ' 時間桶遮罩圖 (bucket_mask)', 'value': 'bucket_mask'},
                     {'label': ' 標籤預覽分布', 'value': 'label_preview'},
                     {'label': ' 元數據表格', 'value': 'metadata'}
                 ],
                 value=['mids', 'label_preview', 'metadata'],
-                style={'fontFamily': 'Microsoft YaHei, Arial'}
+                style={'fontFamily': 'Microsoft YaHei, Arial', 'fontSize': '12px'}
             ),
 
             # 快取資訊
@@ -495,17 +508,22 @@ def update_single_stock_view(symbol, dir_info, display_options):
 
         charts = []
 
+        # 獲取基礎數據
+        features = data['features']
+        mids = data['mids']
+        metadata = data.get('metadata', {})
+        labels = data.get('labels')  # 可能為 None
+        bucket_event_count = data.get('bucket_event_count')
+        bucket_mask = data.get('bucket_mask')
+
         # 1. 中間價折線圖（帶標籤疊加）
         if 'mids' in display_options:
-            mids = data['mids']
-            metadata = data.get('metadata', {})
-
             # 優先使用已保存的標籤，否則實時計算
-            labels = data.get('labels')  # 從 NPZ 讀取標籤
-            if labels is None:
+            labels_for_plot = labels
+            if labels_for_plot is None:
                 # 如果 NPZ 中沒有標籤，實時計算
                 print(f"[INFO] NPZ 中無標籤數據，實時計算標籤...")
-                labels = compute_labels_from_mids(mids, metadata)
+                labels_for_plot = compute_labels_from_mids(mids, metadata)
             else:
                 print(f"[INFO] 使用 NPZ 中已保存的標籤數據")
 
@@ -521,9 +539,13 @@ def update_single_stock_view(symbol, dir_info, display_options):
             ))
 
             # 疊加標籤點（如果有標籤）
-            if labels is not None:
+            if labels_for_plot is not None:
+                # 過濾 NaN 值
+                valid_mask = ~np.isnan(labels_for_plot)
+                valid_labels = labels_for_plot[valid_mask]
+
                 # Down (-1): 紅色
-                down_indices = np.where(labels == -1)[0]
+                down_indices = np.where(labels_for_plot == -1)[0]
                 if len(down_indices) > 0:
                     fig_mids.add_trace(go.Scatter(
                         x=down_indices,
@@ -535,7 +557,7 @@ def update_single_stock_view(symbol, dir_info, display_options):
                     ))
 
                 # Neutral (0): 灰色
-                neutral_indices = np.where(labels == 0)[0]
+                neutral_indices = np.where(labels_for_plot == 0)[0]
                 if len(neutral_indices) > 0:
                     fig_mids.add_trace(go.Scatter(
                         x=neutral_indices,
@@ -547,7 +569,7 @@ def update_single_stock_view(symbol, dir_info, display_options):
                     ))
 
                 # Up (1): 綠色
-                up_indices = np.where(labels == 1)[0]
+                up_indices = np.where(labels_for_plot == 1)[0]
                 if len(up_indices) > 0:
                     fig_mids.add_trace(go.Scatter(
                         x=up_indices,
@@ -575,9 +597,133 @@ def update_single_stock_view(symbol, dir_info, display_options):
             )
             charts.append(dcc.Graph(figure=fig_mids))
 
-        # 2. 標籤預覽
+        # 2. LOB 特徵矩陣熱圖
+        if 'features' in display_options and features is not None:
+            # 只顯示前 500 個時間點（避免過大）
+            T_display = min(500, features.shape[0])
+            features_display = features[:T_display, :]
+
+            # 特徵名稱
+            feature_names = (
+                [f'ask_price_{i+1}' for i in range(5)] +
+                [f'ask_vol_{i+1}' for i in range(5)] +
+                [f'bid_price_{i+1}' for i in range(5)] +
+                [f'bid_vol_{i+1}' for i in range(5)]
+            )
+
+            fig_features = go.Figure(data=go.Heatmap(
+                z=features_display.T,
+                x=list(range(T_display)),
+                y=feature_names,
+                colorscale='Viridis',
+                hovertemplate='時間: %{x}<br>特徵: %{y}<br>值: %{z:.2f}<extra></extra>'
+            ))
+
+            fig_features.update_layout(
+                title=f'{symbol} - LOB 特徵矩陣熱圖（前 {T_display} 時間步）',
+                xaxis_title='時間步',
+                yaxis_title='特徵',
+                height=600,
+                font=dict(family='Microsoft YaHei, Arial')
+            )
+            charts.append(dcc.Graph(figure=fig_features))
+
+        # 3. 標籤陣列視覺化
+        if 'labels' in display_options and labels is not None:
+            # 過濾 NaN
+            valid_mask = ~np.isnan(labels)
+            valid_labels = labels[valid_mask]
+            valid_indices = np.where(valid_mask)[0]
+
+            # 創建標籤時間序列圖
+            fig_labels = go.Figure()
+
+            # 為每個標籤類別添加散點
+            for label_val, label_name, color in [
+                (-1, 'Down', '#e74c3c'),
+                (0, 'Neutral', '#95a5a6'),
+                (1, 'Up', '#27ae60')
+            ]:
+                label_mask = valid_labels == label_val
+                label_indices = valid_indices[label_mask]
+                label_values = valid_labels[label_mask]
+
+                fig_labels.add_trace(go.Scatter(
+                    x=label_indices,
+                    y=label_values,
+                    mode='markers',
+                    name=label_name,
+                    marker=dict(color=color, size=3, opacity=0.7),
+                    hovertemplate=f'{label_name}<br>時間步: %{{x}}<extra></extra>'
+                ))
+
+            fig_labels.update_layout(
+                title=f'{symbol} - 標籤時間序列（總計 {len(valid_labels)} 個有效標籤）',
+                xaxis_title='時間步',
+                yaxis_title='標籤值',
+                height=400,
+                yaxis=dict(
+                    tickmode='array',
+                    tickvals=[-1, 0, 1],
+                    ticktext=['Down (-1)', 'Neutral (0)', 'Up (1)']
+                ),
+                font=dict(family='Microsoft YaHei, Arial')
+            )
+            charts.append(dcc.Graph(figure=fig_labels))
+
+        # 4. 事件數量圖
+        if 'bucket_event_count' in display_options and bucket_event_count is not None:
+            fig_events = go.Figure()
+
+            fig_events.add_trace(go.Scatter(
+                y=bucket_event_count,
+                mode='lines',
+                name='事件數',
+                line=dict(color='#3498db', width=1),
+                fill='tozeroy',
+                hovertemplate='時間步: %{x}<br>事件數: %{y}<extra></extra>'
+            ))
+
+            fig_events.update_layout(
+                title=f'{symbol} - 每秒事件數量（平均: {bucket_event_count.mean():.1f}）',
+                xaxis_title='時間步',
+                yaxis_title='事件數',
+                height=400,
+                font=dict(family='Microsoft YaHei, Arial')
+            )
+            charts.append(dcc.Graph(figure=fig_events))
+
+        # 5. 時間桶遮罩圖
+        if 'bucket_mask' in display_options and bucket_mask is not None:
+            valid_ratio = bucket_mask.mean()
+
+            fig_mask = go.Figure()
+
+            fig_mask.add_trace(go.Scatter(
+                y=bucket_mask,
+                mode='lines',
+                name='遮罩',
+                line=dict(color='#9b59b6', width=1),
+                fill='tozeroy',
+                hovertemplate='時間步: %{x}<br>狀態: %{y}<extra></extra>'
+            ))
+
+            fig_mask.update_layout(
+                title=f'{symbol} - 時間桶遮罩（有效比例: {valid_ratio:.2%}）',
+                xaxis_title='時間步',
+                yaxis_title='遮罩值 (0=缺失, 1=有效)',
+                height=400,
+                yaxis=dict(
+                    tickmode='array',
+                    tickvals=[0, 1],
+                    ticktext=['缺失', '有效']
+                ),
+                font=dict(family='Microsoft YaHei, Arial')
+            )
+            charts.append(dcc.Graph(figure=fig_mask))
+
+        # 6. 標籤預覽
         if 'label_preview' in display_options:
-            metadata = data.get('metadata', {})
             label_preview = metadata.get('label_preview')
 
             if label_preview:
@@ -593,9 +739,8 @@ def update_single_stock_view(symbol, dir_info, display_options):
                     style={'color': '#7f8c8d', 'padding': '20px', 'fontFamily': 'Microsoft YaHei, Arial'}
                 ))
 
-        # 3. 元數據表格
+        # 7. 元數據表格
         if 'metadata' in display_options:
-            metadata = data.get('metadata', {})
             if metadata:
                 fig_meta = create_metadata_table(metadata)
                 fig_meta.update_layout(
