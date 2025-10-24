@@ -34,6 +34,11 @@ python scripts/extract_tw_stock_data_v7.py    --preprocessed-dir ./data/preproce
 ### 訓練模型
 python scripts\train_deeplob_v5.py --config configs\train_v5.yaml --data-dir data\processed_v7\npz
 
+python scripts\train_deeplob_v5.py --config configs\train_v5_experiment4_practical.yaml --data-dir data\processed_v7\npz
+python scripts\train_deeplob_v5.py --config configs\train_v5_experiment4.yaml --data-dir data\processed_v7\npz
+
+train_v5_experiment4_practical.yaml
+
 
 
 
