@@ -1261,15 +1261,18 @@ def process_single_day(txt_file: str, output_dir: str, config: Dict) -> Dict:
         else:
             stats["symbols_filtered_out"] += 1
 
-        # 🆕 計算標籤預覽（僅對通過過濾的股票）
+        # 🆕 計算標籤預覽（所有股票都計算，用於 V7）
         label_preview = None
         labels_array = None
-        if pass_filter:
-            label_preview = compute_label_preview(mids, tb_config, return_labels=True)
-            if label_preview is not None:
+
+        # V7 相容性修改：為所有股票計算 labels（不只是通過過濾的）
+        label_preview = compute_label_preview(mids, tb_config, return_labels=True)
+        if label_preview is not None:
+            # 僅統計通過過濾的股票
+            if pass_filter:
                 all_label_previews.append(label_preview)
-                # 提取標籤陣列
-                labels_array = label_preview.get('labels_array')
+            # 但所有股票都保存 labels 陣列
+            labels_array = label_preview.get('labels_array')
 
         # 保存（無論是否通過過濾，都保存，但標記狀態）
         save_preprocessed_npz(

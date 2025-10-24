@@ -2,6 +2,22 @@ conda activate deeplob-pro
 
 scripts\batch_preprocess.bat
 
+如何選擇合適的股票用於訓練？
+
+python scripts/analyze_label_distribution.py --preprocessed-dir data/preprocessed_v5_1hz --mode recommend --target-dist 0.30,0.40,0.30
+python scripts/analyze_label_distribution.py --preprocessed-dir data/preprocessed_swing --mode analyze
+
+1.
+python scripts/analyze_label_distribution.py --preprocessed-dir data/preprocessed_swing --mode interactive --start-date 20250901 --min-samples 5000000 --output ./data/dataset_selection.json
+2.
+python scripts/analyze_label_distribution.py --preprocessed-dir data/preprocessed_swing --mode smart_recommend --start-date 20250901 --min-samples 1000000 --output dataset_selection.json
+
+
+### 產生訓練資料
+python scripts/extract_tw_stock_data_v7.py    --preprocessed-dir ./data/preprocessed_swing  --output-dir ./data/processed_v7 --config configs/config_pro_v7_optimal.yaml --json ./data/dataset_selection.json
+
+
+
 
 ###穩定性驗證
 python scripts\stability_check.py --preprocessed-dir data\preprocessed_v5_1hz --output-dir data\stability_check --train-window 6    --test-window 2 --step 4

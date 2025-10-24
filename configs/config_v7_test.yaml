@@ -1,0 +1,42 @@
+# V7 簡化版測試配置
+version: "7.0.0-simplified"
+description: "V7 簡化版測試配置 - 小數據集快速測試"
+
+# V7 新增：數據選擇（⭐⭐⭐⭐⭐ 核心功能）
+data_selection:
+  # 選項 1: 使用 JSON 文件（優先級最高）
+  json_file: null  # 例如: "results/dataset_selection_auto.json"
+  
+  # 選項 2: 使用配置過濾（後備方案）
+  start_date: "20250901"  # 起始日期
+  end_date: null          # 結束日期（null = 最晚）
+  num_days: 2             # 處理天數（測試用 2 天）
+  symbols: null           # 指定股票（null = 全部）
+  sample_ratio: 1.0       # 採樣比例
+
+# V7 簡化：權重策略（直接從 metadata 讀取）
+sample_weights:
+  enabled: true
+  strategy: "effective_num_0999"  # 從預計算的 11 種策略選擇
+
+# 資料處理參數
+data:
+  seq_len: 100
+  aggregation_factor: 10
+
+# 資料切分（按股票劃分）
+split:
+  train_ratio: 0.70
+  val_ratio: 0.15
+  test_ratio: 0.15
+  seed: 42
+
+# 輸出設定
+output:
+  save_meta: true
+  compression: 'compressed'
+
+# V7 移除的配置（不再需要）
+# ❌ triple_barrier 參數（預處理決定）
+# ❌ volatility 參數（預處理決定）
+# ❌ sample_generation.target_dist（使用 dataset_selection.json 控制）

@@ -1,0 +1,50 @@
+# V7 簡化版最佳配置
+version: "7.0.0-simplified"
+description: "V7 簡化版生產配置 - 完整數據集"
+
+# V7 新增：數據選擇（⭐⭐⭐⭐⭐ 核心功能）
+data_selection:
+  # 選項 1: 使用 JSON 文件（推薦，優先級最高）
+  json_file: "results/dataset_selection_auto.json"
+  
+  # 選項 2: 使用配置過濾（JSON 不存在時的後備方案）
+  start_date: null        # 起始日期（null = 最早）
+  end_date: null          # 結束日期（null = 最晚）
+  num_days: null          # 處理天數（null = 全部）
+  symbols: null           # 指定股票（null = 全部）
+  sample_ratio: 1.0       # 採樣比例（1.0 = 100%）
+  random_seed: 42         # 隨機種子
+
+# V7 簡化：權重策略（直接從 metadata 讀取）
+sample_weights:
+  enabled: true
+  strategy: "balanced"  # 從預處理數據的權重策略中選擇
+  # 可用策略 (來自 preprocess_single_day.py):
+  #   - uniform         # 無權重（全部 1.0）
+  #   - balanced        # 標準平衡權重（推薦）
+  #   - balanced_sqrt   # 平方根平衡權重（較溫和）
+  #   - inverse_freq    # 逆頻率權重（極端平衡）
+  #   - focal_alpha     # Focal Loss 風格權重
+
+# 資料處理參數
+data:
+  seq_len: 100              # 滑動窗口大小
+  aggregation_factor: 10    # 聚合因子（秒）
+
+# 資料切分（按股票劃分）
+split:
+  train_ratio: 0.70
+  val_ratio: 0.15
+  test_ratio: 0.15
+  seed: 42
+
+# 輸出設定
+output:
+  save_meta: true           # 保存 metadata.json
+  compression: 'compressed' # NPZ 壓縮
+
+# V7 移除的配置（不再需要，預處理階段決定）
+# ❌ triple_barrier 參數
+# ❌ volatility 參數  
+# ❌ sample_generation.target_dist
+# 如需修改標籤參數，請重新運行預處理：scripts/batch_preprocess.bat
