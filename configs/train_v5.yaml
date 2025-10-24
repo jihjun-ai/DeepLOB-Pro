@@ -78,9 +78,9 @@ model:
   conv1_filters: 32
   conv2_filters: 32
   conv3_filters: 32
-  lstm_hidden_size: 32  # 保持小模型（控制過擬合）
-  fc_hidden_size: 32    # 保持小模型（控制過擬合）
-  dropout: 0.7  # 進一步增加 dropout（0.6→0.7，對抗嚴重過擬合）
+  lstm_hidden_size: 24  # 實驗 2：減小模型容量（32→24，降低過擬合）
+  fc_hidden_size: 24    # 實驗 2：減小模型容量（32→24，降低過擬合）
+  dropout: 0.8  # 實驗 2：增強 dropout（0.7→0.8，更激進正則化）
 
   # Stock Embeddings（当 data.use_stock_ids=true 生效）
   embeddings:
@@ -110,9 +110,9 @@ loss:
 # ==================== 优化器配置 ====================
 optim:
   name: "adamw"
-  lr: 0.000004   # 實驗 6：保持 4e-6（實驗 4/5 最佳點）
-  weight_decay: 0.001  # 保持強正則化
-  grad_clip: 0.8  # 實驗 6：更嚴格梯度裁剪（1.0→0.8，控制 Grad Norm）
+  lr: 0.000003   # 實驗 2：降低學習率（4e-6→3e-6，減緩學習）
+  weight_decay: 0.01  # 實驗 2：10倍增強 L2 正則化（0.001→0.01）
+  grad_clip: 0.5  # 實驗 2：更嚴格梯度裁剪（0.8→0.5，抑制梯度爆炸）
   amp: false  # 關閉混合精度
   use_bf16: false  # 關閉 BF16
 
@@ -124,20 +124,20 @@ optim:
 # ==================== 学习率调度器 ====================
 sched:
   name: "cosine"  # 保持 cosine（溫和衰減）
-  warmup_ratio: 0.40  # 實驗 6：延長預熱（0.30→0.40，更長穩定期）
-  eta_min: 3.0e-6  # 最小 LR（從 4e-6 降到 3e-6，避免停滯）
+  warmup_ratio: 0.40  # 保持 40% warmup（更長穩定期）
+  eta_min: 2.0e-6  # 實驗 2：降低最小 LR（3e-6→2e-6，配合新 lr=3e-6）
 
 # ==================== 训练配置 ====================
 train:
-  epochs: 30  # 實驗 5：降低 epochs（100→30，常數 LR 快速收斂）
+  epochs: 15  # 實驗 2：縮短訓練期（30→15，避免過度訓練）
   accumulate_steps: 1  # 無梯度累積
 
   # 早停（監控 Val F1）
   early_stop:
     metric: "val.f1_macro_weighted"  # 主要指標：加權 F1
-    patience: 5  # 實驗 6：提高耐心（3→5，配合 min_delta 避免空轉）
+    patience: 3  # 實驗 2：降低耐心（5→3，更早停止）
     mode: "max"
-    min_delta: 0.0008  # 實驗 6：最小改善閾值（避免在噪音中徘徊）
+    min_delta: 0.001  # 實驗 2：提高改善閾值（0.0008→0.001，更嚴格）
 
 # ==================== 评估配置 ====================
 eval:
