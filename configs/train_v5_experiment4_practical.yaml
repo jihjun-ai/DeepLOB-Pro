@@ -1,0 +1,276 @@
+# ===================================================================
+# DeepLOB V5 實驗 4：務實版調參（基於實際訓練數據）
+# 核心理念：Epoch 5 之後就是災難，如何避免？
+# 日期：2025-10-24
+# ===================================================================
+
+# ==================== 運行配置 ====================
+run:
+  seed: 42
+
+# ==================== 標籤配置 ====================
+labels:
+  num_classes: 3
+  class_names: ["下跌", "持平", "上漲"]
+  class_names_en: ["down", "stationary", "up"]
+  class_ids: [0, 1, 2]
+  format: "v5"
+
+  weight_calculation:
+    epsilon: 1.0e-6
+    normalize: true
+
+# ==================== 可視化配置 ====================
+visualization:
+  confusion_matrix:
+    normalize: true
+    dpi: 150
+    figsize: [8, 6]
+    cmap: "Blues"
+
+# ==================== 數據配置 ====================
+data:
+  train: "data/processed_v7/npz/stock_embedding_train.npz"
+  val: "data/processed_v7/npz/stock_embedding_val.npz"
+  test: "data/processed_v7/npz/stock_embedding_test.npz"
+  norm_meta: "data/processed_v7/npz/normalization_meta.json"
+
+  v5_labels: true
+
+  y_raw_validation:
+    enabled: true
+    expected_values: [-1, 0, 1]
+
+  # 關閉樣本權重（實驗 1-3 都有用，但沒改善 Class 1）
+  use_sample_weights: false
+  weights_normalize: "mean_to_1"
+
+  use_stock_ids: false
+  fail_on_missing_keys: true
+
+# ==================== DataLoader 配置 ====================
+dataloader:
+  batch_size: 384
+  num_workers: 12
+  pin_memory: true
+
+  # 關閉平衡採樣器
+  balance_sampler:
+    enabled: false
+    strategy: "inv_freq"
+
+# ==================== 模型配置 ====================
+model:
+  arch: "DeepLOB"
+
+  input:
+    shape: [100, 20]
+
+  num_classes: 3
+
+  conv1_filters: 32
+  conv2_filters: 32
+  conv3_filters: 32
+
+  # 【務實】標準容量（實驗 2 的 24 太小）
+  lstm_hidden_size: 32
+  fc_hidden_size: 32
+
+  # 【務實】適度提高 Dropout（0.7 → 0.75）
+  dropout: 0.75
+
+  embeddings:
+    enabled: false
+    num_stocks: 367
+    dim: 16
+    dropout: 0.1
+    weight_decay: 0.0001
+    max_norm: null
+    unk_strategy: "explicit_unk"
+    feature_dropout:
+      p: 0.3
+    conditioning: "film"
+
+# ==================== 損失函數配置 ====================
+loss:
+  type: "ce"
+
+  # 【務實】不用 class_weights（實驗 1-3 沒明顯幫助）
+  class_weights: "none"
+
+  # 【務實】輕度標籤平滑（0.02，不過度）
+  label_smoothing:
+    global: 0.02
+    flat_bonus: 0.00
+
+# ==================== 優化器配置 ====================
+optim:
+  name: "adamw"
+
+  # 【核心】降低學習率峰值（5e-6 太高 → 2.5e-6）
+  # 觀察：Epoch 6-10 的 LR 在 4e-6~5e-6，梯度爆炸
+  # 策略：直接降低峰值，避免後期過高
+  lr: 0.0000025  # 2.5e-6（降低 50%）
+
+  # 【務實】適度 Weight Decay（0.005 → 0.001）
+  weight_decay: 0.001
+
+  # 【核心】嚴格梯度裁剪（0.6 → 1.5）
+  # 觀察：梯度從 3.10 飆到 17.34（5.6倍）
+  # 策略：1.5 可容忍小波動，但嚴格控制爆炸
+  grad_clip: 1.5
+
+  amp: false
+  use_bf16: false
+
+  betas: [0.9, 0.999]
+  eps: 1.0e-8
+  amsgrad: false
+
+# ==================== 學習率調度器 ====================
+sched:
+  name: "cosine"
+
+  # 【務實】短 Warmup（40% 太長 → 16.7%）
+  # 觀察：Epoch 5 達頂點（約 40% 處），之後無用
+  # 策略：更快達峰值，更長時間衰減
+  warmup_ratio: 0.167  # 2/12 = 16.7%（2 個 epoch）
+  warmup_start_factor: 0.4  # 起點 1e-6（2.5e-6 × 0.4）
+
+  # 【核心】提高最小學習率（避免過早僵化）
+  eta_min: 0.000001  # 1e-6（不要降太低）
+
+# ==================== 訓練配置 ====================
+train:
+  # 【務實】縮短訓練期（Epoch 5 後沒用 → 10 epochs 足夠）
+  epochs: 10
+  accumulate_steps: 1
+
+  # 【核心】更激進早停（Patience 1，最低改善 0.0005）
+  early_stop:
+    metric: "val.f1_macro_weighted"
+    patience: 1  # 1 個 epoch 沒改善就停
+    mode: "max"
+    min_delta: 0.0005
+
+# ==================== 評估配置 ====================
+eval:
+  group_split:
+    by_stock: true
+
+  metrics:
+    unweighted: ["acc", "f1_macro", "per_class_pr_rc", "confusion"]
+    weighted: ["f1_macro", "loss"]
+
+  breakdowns: ["reasons", "t_hit_bucket", "ret_quantile", "stock"]
+  thit_buckets: [0, 5, 10, 20, 100]
+  ret_quantiles: [0.8, 0.9, 0.95]
+
+# ==================== 校準配置 ====================
+calibration:
+  enabled: true
+  type: "temperature"
+  opt_metric: "weighted_nll"
+  lr: 0.01
+  max_iter: 50
+
+# ==================== 推理配置 ====================
+inference:
+  decision: "argmax"
+  cost_matrix:
+    path: null
+  hold_threshold: 0.0
+
+# ==================== 日誌配置 ====================
+logging:
+  dir: "logs/deeplob_v5_exp4_practical"
+  save_best_by: "val.f1_macro_weighted"
+
+  artifacts:
+    - "model"
+    - "norm_meta"
+    - "label_mapping"
+    - "calibration"
+    - "cost_matrix"
+    - "metrics_json"
+    - "logs_csv"
+    - "confmat_png"
+
+  wandb:
+    enabled: false
+    project: "deeplob-v5-exp4-practical"
+    entity: null
+
+# ==================== 安全檢查 ====================
+safety_checks:
+  validate_label_set: true
+  validate_weights: true
+  validate_norm_meta: true
+  print_data_summary: true
+
+# ==================== 硬體配置 ====================
+hardware:
+  device: "cuda"
+  num_workers: 12
+  pin_memory: true
+  prefetch_factor: 4
+  persistent_workers: true
+  enable_tf32: true
+
+# ==================== 續訓配置 ====================
+resume:
+  enabled: false
+  checkpoint_path: "checkpoints/v5_exp4_practical/deeplob_v5_best.pth"
+  load_optimizer: true
+
+# ==================== 其他配置 ====================
+misc:
+  save_last: true
+  output_dir: "checkpoints/v5_exp4_practical"
+
+# ===================================================================
+# 實驗 4 務實版核心策略
+# ===================================================================
+#
+# 【基於實際數據的 3 個核心改動】：
+#
+# 1. **降低學習率峰值**（最關鍵）
+#    - 舊：5e-6（實驗 3）
+#    - 新：2.5e-6（降低 50%）
+#    - 理由：Epoch 6-10 的 LR 在 4e-6~5e-6，梯度爆炸
+#
+# 2. **嚴格梯度裁剪**
+#    - 舊：0.6（太鬆，梯度飆到 17.34）
+#    - 新：1.5（容忍小波動，嚴控大爆炸）
+#    - 理由：3.10 → 17.34（5.6倍增長）需要嚴格控制
+#
+# 3. **更早停止訓練**
+#    - 舊：20 epochs, Patience=5
+#    - 新：10 epochs, Patience=1
+#    - 理由：Epoch 5 後完全沒用，提早停止避免浪費
+#
+# 【其他調整】：
+# - Dropout: 0.7 → 0.75（+0.05，輕度提升）
+# - Weight Decay: 0.005 → 0.001（配合 Dropout）
+# - Label Smoothing: 0.02（輕度）
+# - Warmup: 40% → 16.7%（更快達峰值）
+# - eta_min: 3e-6 → 1e-6（不要降太低）
+# - 關閉 sample_weights, class_weights（實驗 1-3 沒明顯幫助）
+#
+# 【預期目標】：
+# - Best Epoch: 5-7（不會太晚）
+# - Val Acc: 45-48%（提升 2-5%）
+# - Grad Norm: <5.0（穩定）
+# - Val Loss: 持續下降或穩定
+# - Train-Val Gap: 5-8%（合理範圍）
+#
+# 【訓練指令】：
+# conda activate deeplob-pro
+# python scripts/train_deeplob_v5.py --config configs/train_v5_experiment4_practical.yaml
+#
+# 【監控重點】：
+# 1. Epoch 5-7 的梯度範數（應 <5.0）
+# 2. Val Loss 在 Epoch 5 後是否持續下降（不發散）
+# 3. 是否在 Epoch 6-8 提早停止（正常現象）
+#
+# ===================================================================
