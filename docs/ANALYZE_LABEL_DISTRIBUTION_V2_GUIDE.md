@@ -1,9 +1,10 @@
-# 智能標籤分布分析與數據集選取工具 v2.0 使用指南
+# 智能標籤分布分析與數據集選取工具 v3.0 使用指南
 
 ## 📋 目錄
 - [功能概述](#功能概述)
 - [核心改進](#核心改進)
 - [使用方式](#使用方式)
+- [🆕 最小化推薦模式](#最小化推薦模式-minimal)
 - [演算法說明](#演算法說明)
 - [輸出格式](#輸出格式)
 - [實際範例](#實際範例)
@@ -13,9 +14,9 @@
 
 ## 功能概述
 
-`analyze_label_distribution.py v2.0` 是一個智能化的數據集選取工具，幫助你從大量預處理數據中，**自動組合出最適合 DeepLOB 模型學習的日期+個股組合**。
+`analyze_label_distribution.py v3.0` 是一個智能化的數據集選取工具，幫助你從大量預處理數據中，**自動組合出最適合 DeepLOB 模型學習的日期+個股組合**。
 
-### 五大核心功能
+### 六大核心功能
 
 1. **自動從起始日期開始掃描**
    - 逐日遞增掃描所有預處理 NPZ 數據
@@ -33,10 +34,17 @@
    - 顯示 3-5 個候選方案（保守/平衡/積極）
    - 讓使用者根據實際需求選擇
 
-5. **詳細選取報告**
+5. **🆕 最小化推薦模式（v3.0 新增）**
+   - 按標籤平衡度排序股票（香農熵計算）
+   - 逐檔累積，達標即停（避免數據量過大）
+   - Neff 最優化（有效樣本數最大化）
+   - 天數限制控制（預設 10 天）
+
+6. **詳細選取報告**
    - 日期列表（範圍、天數、明細）
    - 個股列表（數量、代碼）
    - 標籤分布（數量、比例、與目標偏差）
+   - Neff 指標（v3.0 新增）
 
 ---
 
@@ -57,7 +65,7 @@
 
 ## 使用方式
 
-### 三種執行模式
+### 四種執行模式
 
 #### 模式 1: 基礎分析 (`analyze`)
 **用途**: 快速查看所有數據的標籤分布概況
@@ -239,6 +247,228 @@ python scripts/analyze_label_distribution.py \
 
 ✅ 選取結果已保存到: dataset_selection_20250901-20250908.json
 ```
+
+---
+
+#### 🆕 模式 4: 最小化推薦 (`minimal`)
+**用途**: 在不爆量的前提下，組出達標且 Neff 最優、類別平衡的訓練資料組
+
+**核心特性**:
+- ✅ **按標籤平衡度排序**：優先選擇分布均勻的股票（使用香農熵計算）
+- ✅ **逐檔累積**：按股票逐檔加入（而非逐日），達標即停
+- ✅ **天數限制**：只使用最近 N 天的數據，避免處理量過大
+- ✅ **安全閾值**：任一類別占比 < 80%，無零樣本類別
+- ✅ **Neff 最優化**：選擇有效樣本數最大的組合
+
+```bash
+# 基礎用法（均勻分布目標）
+python scripts/analyze_label_distribution.py \
+    --preprocessed-dir data/preprocessed_swing \
+    --mode minimal \
+    --min-samples 1000000 \
+    --days 10 \
+    --output results/dataset_selection_minimal.json
+
+# 指定目標分布
+python scripts/analyze_label_distribution.py \
+    --preprocessed-dir data/preprocessed_swing \
+    --mode minimal \
+    --min-samples 1000000 \
+    --target-dist "0.30,0.40,0.30" \
+    --days 15 \
+    --output results/dataset_selection_minimal.json
+```
+
+**參數說明**:
+- `--min-samples` **(必填)**: 總樣本下限（例：1,000,000）
+- `--target-dist` **(選填)**: 目標分布（例：0.30,0.40,0.30），未提供時使用均勻分布
+- `--days` **(選填)**: 最大天數上限（預設 10），避免處理量過大
+
+**輸出範例**:
+```
+載入預處理數據...
+掃描到 2146 個 NPZ 檔案
+載入 1785 檔有效股票（日期 >= 全部）
+未指定 --target-dist，使用均勻分布作為平衡目標: (0.333, 0.333, 0.333)
+天數限制: 總共 10 天數據，全部使用
+  股票排序: 按標籤平衡度（平衡 -> 不平衡）
+  平衡度範圍: 0.000 ~ 0.994
+
+開始智能最小化推薦：
+  目標分布: Down 33.3% | Neutral 33.3% | Up 33.3%
+  最小樣本數: 1,000,000
+  可用股票數: 354 檔
+  天數範圍: 10 天
+  達標！累積 18 檔股票，1,098,168 樣本
+     偏差: 0.1175, Neff: 291,991
+
+成功達標！Neff: 291,991, 偏差: 0.1175
+
+====================================================================================================
+[Minimal Mode] 最小化推薦結果
+====================================================================================================
+
+[SUCCESS] 成功達標！Neff: 291,991, 偏差: 0.1175
+
+====================================================================================================
+[SELECTED] 已選取數據集
+====================================================================================================
+[Deviation] 0.1175
+[Neff] 291,991
+
+[Date List]
+  Range: 20250901 - 20250912
+  Days: 10
+  Details: 20250901, 20250902, 20250903, 20250904, 20250905, 20250908, 20250909, 20250910, 20250911, 20250912
+
+[Stock List]
+  Count: 18 stocks (unique)
+  Details: 2228, 2429, 2431, 2493, 2630, 2645, 3167, 3257, 3515, 3535, 3563, 4766, 4989, 6442, 6449, 6928, 8210, 8261
+
+[File Pairs]
+  Total: 76 records (date x symbol pairs)
+  Note: Each pair corresponds to one NPZ file
+  Sample (first 10):
+     1. 20250901-2228   -> data/preprocessed_swing\daily\20250901\2228.npz
+     2. 20250901-2630   -> data/preprocessed_swing\daily\20250901\2630.npz
+     3. 20250901-2645   -> data/preprocessed_swing\daily\20250901\2645.npz
+     4. 20250901-3167   -> data/preprocessed_swing\daily\20250901\3167.npz
+     5. 20250901-3535   -> data/preprocessed_swing\daily\20250901\3535.npz
+     ...
+
+[Total Samples]
+  1,098,168 samples (sum of all pairs)
+
+[Label Distribution]
+  Down:         338,184 (30.80%)  [Target: 33.33%, Deviation: -2.54%]
+  Neutral:      467,993 (42.62%)  [Target: 33.33%, Deviation: +9.28%]
+  Up:           291,991 (26.59%)  [Target: 33.33%, Deviation: -6.74%]
+
+====================================================================================================
+
+[SAVED] 選取結果已保存到: results/dataset_selection_minimal.json
+[DONE] 完成
+```
+
+**適用場景**:
+- ✅ 趨勢標籤數據（標籤極度不平衡，如 Neutral 占 70%+）
+- ✅ 需要控制數據量（避免使用全部股票）
+- ✅ 需要 Neff 最優化（有效樣本數最大化）
+- ✅ 快速測試訓練流程（小數據集快速迭代）
+
+**與其他模式的差異**:
+- `smart_recommend`: 逐日累積，多方案生成
+- `minimal`: **逐檔累積**，達標即停，**按平衡度排序**
+
+---
+
+## 最小化推薦模式 (minimal)
+
+### 核心理念
+
+**目標**: 在不爆量的前提下，組出達到樣本門檻且 Neff 最佳、類別平衡的訓練資料組
+
+### 演算法流程
+
+```
+1. 天數限制
+   ↓
+   只使用最近 --days 天的數據（預設 10 天）
+
+2. 按股票分組
+   ↓
+   每檔股票包含所有可用日期的數據
+
+3. 計算平衡度分數
+   ↓
+   使用香農熵計算每檔股票的標籤平衡度
+   完全均勻分布時熵最大（平衡度 = 1.0）
+   完全不平衡時熵為 0（平衡度 = 0.0）
+
+4. 按平衡度排序
+   ↓
+   平衡度高的股票優先（平衡 -> 不平衡）
+
+5. 逐檔累積
+   ↓
+   按排序順序逐檔加入股票
+
+6. 安全檢查（每次累積後）
+   ↓
+   - 任一類別占比不得 > 80%
+   - 任一類別樣本數不得為 0
+
+7. 達標即停
+   ↓
+   total_samples >= min_samples 且安全時停止
+
+8. 最優選擇
+   ↓
+   - 未指定 target_dist：選 Neff 最大 + 均勻分布偏差最小
+   - 指定 target_dist：選 Neff 最大 + 目標分布偏差最小
+```
+
+### 香農熵計算（平衡度分數）
+
+```python
+def calculate_balance_score(stock):
+    """計算單一股票的標籤平衡度分數（0~1）"""
+    # 提取三類占比
+    down_pct = stock['down_pct']
+    neutral_pct = stock['neutral_pct']
+    up_pct = stock['up_pct']
+
+    # 計算香農熵
+    entropy = -sum(p * log(p) for p in [down_pct, neutral_pct, up_pct])
+
+    # 正規化到 [0, 1]（最大熵為 log(3) ≈ 1.099）
+    balance_score = entropy / log(3)
+
+    return balance_score
+```
+
+**平衡度解讀**:
+- `0.95 ~ 1.00`: 非常平衡（接近均勻分布 33.33%/33.33%/33.33%）
+- `0.80 ~ 0.95`: 較平衡
+- `0.50 ~ 0.80`: 中等平衡
+- `0.00 ~ 0.50`: 不平衡（某類別占比過高）
+
+### Neff 計算（有效樣本數）
+
+```python
+def calculate_neff(stocks):
+    """計算有效樣本數 Neff"""
+    dist = calculate_distribution(stocks)
+
+    # 計算各類別權重（1 / p_i）
+    w_down = 1.0 / dist['down_pct']
+    w_neutral = 1.0 / dist['neutral_pct']
+    w_up = 1.0 / dist['up_pct']
+
+    # Neff = N / max(w_i)
+    neff = dist['total_samples'] / max(w_down, w_neutral, w_up)
+
+    return neff
+```
+
+**Neff 意義**:
+- Neff 越大表示類別越平衡
+- 完全均勻分布時：Neff = N / 3
+- 完全不平衡時（單一類別 100%）：Neff → 0
+
+**範例**:
+- 總樣本 1,000,000，分布 33%/34%/33% → Neff ≈ 333,333（良好）
+- 總樣本 1,000,000，分布 10%/80%/10% → Neff = 100,000（不佳）
+
+### 安全閾值設計
+
+為了適應趨勢標籤數據（Neutral 常占 70%+），minimal 模式使用**寬鬆閾值**：
+
+| 項目 | smart_recommend | minimal |
+|------|----------------|---------|
+| 最大占比限制 | 60% | **80%** |
+| 零樣本檢查 | ✅ | ✅ |
+| 適用場景 | Triple-Barrier | **趨勢標籤** |
 
 ---
 
@@ -618,10 +848,20 @@ deviation = sqrt((down_curr - down_target)^2
 
 ---
 
-**版本**: v2.0
-**更新**: 2025-10-23
+**版本**: v3.0
+**更新**: 2025-10-24
 **作者**: DeepLOB-Pro Team
+
+**更新內容 (v3.0)**:
+- ✅ 新增 `--mode minimal` 最小化推薦模式
+- ✅ 按標籤平衡度排序股票（香農熵計算）
+- ✅ Neff 最優化（有效樣本數計算）
+- ✅ JSON file_list 按 (日期, 股票代碼) 排序
+- ✅ 安全閾值調整為 80%（適應趨勢標籤）
+- ✅ 天數限制參數 `--days`（預設 10 天）
+
 **相關文檔**:
 - [V7 Quick Start](V7_QUICK_START.md)
 - [Trend Labeling Implementation](TREND_LABELING_IMPLEMENTATION.md)
 - [Preprocessed Data Specification](PREPROCESSED_DATA_SPECIFICATION.md)
+- [Dataset Selection JSON Format](DATASET_SELECTION_JSON_FORMAT.md)

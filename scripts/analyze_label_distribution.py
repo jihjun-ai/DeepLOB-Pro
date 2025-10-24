@@ -1,13 +1,14 @@
 # -*- coding: utf-8 -*-
 """
-analyze_label_distribution.py - 智能標籤分布分析與數據集選取工具 v2.0
+analyze_label_distribution.py - 智能標籤分布分析與數據集選取工具 v3.0
 =============================================================================
 【核心功能】
   1. 自動從起始日期開始，逐日遞增掃描所有預處理 NPZ 數據
   2. 基於標籤分布，智能組合出最適合學習的日期+個股組合
   3. 自動計算所需數量，確保達到目標標籤分布（可完整學習）
   4. 互動式選擇界面（顯示多個候選方案，讓使用者選擇）
-  5. 選取後生成詳細報告（日期列表、個股ID、數值比例）
+  5. 🆕 最小化推薦模式（逐檔累積，達標即停，Neff 最優化）
+  6. 選取後生成詳細報告（日期列表、個股ID、數值比例）
 
 【使用方式】
   # 基礎分析模式（掃描所有數據）
@@ -30,6 +31,23 @@ analyze_label_distribution.py - 智能標籤分布分析與數據集選取工具
       --mode interactive \
       --start-date 20250901 \
       --target-dist "0.30,0.40,0.30"
+
+  # 🆕 最小化推薦模式（逐檔累積，達標即停，控制數據量）
+  python scripts/analyze_label_distribution.py \
+      --preprocessed-dir data/preprocessed_v5 \
+      --mode minimal \
+      --min-samples 1000000 \
+      --days 10 \
+      --output dataset_selection_minimal.json
+
+  # 🆕 最小化模式 + 指定目標分布
+  python scripts/analyze_label_distribution.py \
+      --preprocessed-dir data/preprocessed_v5 \
+      --mode minimal \
+      --min-samples 1000000 \
+      --target-dist "0.30,0.40,0.30" \
+      --days 15 \
+      --output dataset_selection_minimal.json
 
 【輸出範例】
   候選方案 1:
@@ -55,8 +73,33 @@ analyze_label_distribution.py - 智能標籤分布分析與數據集選取工具
      - 積極方案（偏差 < 0.03，樣本數較多）
   5. 使用者選擇：顯示 3-5 個候選方案，讓使用者決定
 
-【版本】v2.0
-【更新】2025-10-23
+【🆕 最小化推薦演算法】(mode=minimal)
+  核心理念：在不爆量的前提下，組出達標且 Neff 最優的訓練集
+
+  演算法流程：
+    1. 天數限制：只使用最近 --days 天的數據（預設 10 天）
+    2. 按股票分組：每檔股票包含所有可用日期的數據
+    3. 逐檔累積：按固定順序（股票代碼）逐檔加入
+    4. 安全檢查：
+       - 任一類別占比不得 > 60%
+       - 任一類別樣本數不得為 0
+    5. 達標即停：total_samples >= min_samples 且安全時停止
+    6. 最優選擇：
+       - 未指定 target_dist：選 Neff 最大 + 均勻分布偏差最小
+       - 指定 target_dist：選 Neff 最大 + 目標分布偏差最小
+
+  參數說明：
+    --min-samples (必填): 總樣本下限（例：1,000,000）
+    --target-dist (選填): 目標分布（例：0.30,0.40,0.30），未提供時用均勻分布
+    --days (選填): 最大天數上限（預設 10），避免處理量過大
+
+  Neff 計算公式：
+    Neff = N / max(w_i)
+    其中 w_i = 1 / p_i（類別 i 的權重）
+    Neff 越大表示類別越平衡
+
+【版本】v3.0
+【更新】2025-10-24
 【作者】DeepLOB-Pro Team
 """
 
@@ -156,6 +199,87 @@ def group_by_date(stocks: List[Dict]) -> Dict[str, List[Dict]]:
 # 標籤分布計算與評估
 # ============================================================
 
+def calculate_balance_score(stock: Dict) -> float:
+    """
+    計算單一股票的標籤平衡度分數（越高越平衡）
+
+    使用香農熵 (Shannon Entropy) 來衡量分布均勻度
+    完全均勻分布時熵最大 (log(3) ≈ 1.099)
+    完全不平衡時熵為 0
+
+    Args:
+        stock: 單一股票的 metadata
+
+    Returns:
+        平衡度分數 (0~1，1 表示完全平衡)
+    """
+    # 提取三類占比
+    down_pct = stock.get('down_pct', 0.0)
+    neutral_pct = stock.get('neutral_pct', 0.0)
+    up_pct = stock.get('up_pct', 0.0)
+
+    # 避免 log(0)
+    probs = [max(p, 1e-10) for p in [down_pct, neutral_pct, up_pct]]
+
+    # 計算香農熵
+    entropy = -sum(p * np.log(p) for p in probs)
+
+    # 正規化到 [0, 1]（最大熵為 log(3)）
+    max_entropy = np.log(3)
+    balance_score = entropy / max_entropy
+
+    return float(balance_score)
+
+
+def calculate_stock_group_balance(stocks: List[Dict]) -> float:
+    """
+    計算一組股票（同一檔股票的多天數據）的平均平衡度
+
+    Args:
+        stocks: 同一檔股票的所有日期數據
+
+    Returns:
+        平均平衡度分數
+    """
+    if not stocks:
+        return 0.0
+
+    scores = [calculate_balance_score(s) for s in stocks]
+    return float(np.mean(scores))
+
+
+def calculate_neff(stocks: List[Dict]) -> float:
+    """
+    計算有效樣本數 (Neff) - 使用類別權重倒數加權
+
+    公式: Neff = N / max(w_i)
+    其中 w_i 是各類別的權重 (1 / p_i)
+
+    Args:
+        stocks: 股票 metadata 列表
+
+    Returns:
+        有效樣本數 Neff (越大越好)
+    """
+    dist = calculate_distribution(stocks)
+
+    # 避免除以零
+    down_pct = max(dist['down_pct'], 1e-10)
+    neutral_pct = max(dist['neutral_pct'], 1e-10)
+    up_pct = max(dist['up_pct'], 1e-10)
+
+    # 計算各類別權重
+    w_down = 1.0 / down_pct
+    w_neutral = 1.0 / neutral_pct
+    w_up = 1.0 / up_pct
+
+    # Neff = N / max(w_i)
+    max_weight = max(w_down, w_neutral, w_up)
+    neff = dist['total_samples'] / max_weight
+
+    return float(neff)
+
+
 def calculate_distribution(stocks: List[Dict]) -> Dict[str, Any]:
     """
     計算給定股票列表的標籤分布
@@ -224,6 +348,189 @@ def calculate_deviation(
 # ============================================================
 # 智能推薦演算法（核心）
 # ============================================================
+
+def smart_minimal_recommend(
+    stocks: List[Dict],
+    min_samples: int = 1000000,
+    target_dist: Optional[Tuple[float, float, float]] = None,
+    max_days: int = 10
+) -> Dict:
+    """
+    智能最小化推薦演算法（新版）
+
+    目標: 在不爆量的前提下，組出達到樣本門檻且 Neff 最佳、類別平衡的訓練資料組
+
+    演算法邏輯:
+      1. 按股票分組（每檔股票包含多天數據）
+      2. 逐檔累積加入股票（固定順序：按市值或代碼排序）
+      3. 達標即停：total_samples >= min_samples 時停止加入下一檔
+      4. 天數限制：只使用最近 max_days 天的數據
+      5. 安全閾值檢查：
+         - 任一類別占比不得 > 60%
+         - 任一類別樣本數不得為 0
+      6. 最優選擇：
+         - 未指定 target_dist：選 Neff 最大且與均勻分布偏差最小的組合
+         - 指定 target_dist：選 Neff 最大且與目標分布偏差最小的組合
+
+    Args:
+        stocks: 所有股票 metadata（已按日期排序）
+        min_samples: 總樣本下限（必填）
+        target_dist: 三分類目標分布 (down%, neutral%, up%)，None 表示使用均勻分布
+        max_days: 參考的最大天數上限（預設 10 天）
+
+    Returns:
+        最佳推薦方案字典，若無法達標則返回最佳可行解（帶 warning）
+    """
+    # 預設使用均勻分布
+    if target_dist is None:
+        target_dist = (1/3, 1/3, 1/3)
+        logging.info("未指定 --target-dist，使用均勻分布作為平衡目標: (0.333, 0.333, 0.333)")
+
+    # 天數過濾：只保留最近 max_days 天的數據
+    grouped_by_date = group_by_date(stocks)
+    sorted_dates = sorted(grouped_by_date.keys(), reverse=True)  # 降序（最新在前）
+
+    if len(sorted_dates) > max_days:
+        selected_dates = sorted(sorted_dates[:max_days])  # 取最新 max_days 天，再升序
+        logging.info(f"天數限制: 僅使用最近 {max_days} 天數據（{selected_dates[0]} - {selected_dates[-1]}）")
+        filtered_stocks = [s for s in stocks if s['date'] in selected_dates]
+    else:
+        selected_dates = sorted_dates
+        filtered_stocks = stocks
+        logging.info(f"天數限制: 總共 {len(selected_dates)} 天數據，全部使用")
+
+    # 按股票分組（每檔股票包含所有日期的數據）
+    grouped_by_symbol = defaultdict(list)
+    for stock in filtered_stocks:
+        grouped_by_symbol[stock['symbol']].append(stock)
+
+    # 🆕 按標籤平衡度排序（平衡度高的優先）
+    # 計算每檔股票的平均平衡度分數
+    symbol_balance_scores = {
+        symbol: calculate_stock_group_balance(stocks)
+        for symbol, stocks in grouped_by_symbol.items()
+    }
+
+    # 按平衡度降序排序（平衡度高的在前）
+    sorted_symbols = sorted(
+        grouped_by_symbol.keys(),
+        key=lambda s: symbol_balance_scores[s],
+        reverse=True
+    )
+
+    logging.info("  股票排序: 按標籤平衡度（平衡 -> 不平衡）")
+    logging.info(f"  平衡度範圍: {min(symbol_balance_scores.values()):.3f} ~ {max(symbol_balance_scores.values()):.3f}")
+
+    logging.info("\n開始智能最小化推薦：")
+    logging.info(f"  目標分布: Down {target_dist[0]:.1%} | Neutral {target_dist[1]:.1%} | Up {target_dist[2]:.1%}")
+    logging.info(f"  最小樣本數: {min_samples:,}")
+    logging.info(f"  可用股票數: {len(sorted_symbols)} 檔")
+    logging.info(f"  天數範圍: {len(selected_dates)} 天")
+
+    # 逐檔累積
+    cumulative_stocks = []
+    candidates = []
+
+    for symbol in sorted_symbols:
+        # 加入當前股票的所有日期數據
+        cumulative_stocks.extend(grouped_by_symbol[symbol])
+
+        # 計算累積分布
+        dist = calculate_distribution(cumulative_stocks)
+
+        # 安全閾值檢查
+        is_safe = True
+        reasons = []
+
+        # 檢查是否有類別為 0
+        if dist['down_count'] == 0:
+            is_safe = False
+            reasons.append("Down 類別樣本數為 0")
+        if dist['neutral_count'] == 0:
+            is_safe = False
+            reasons.append("Neutral 類別樣本數為 0")
+        if dist['up_count'] == 0:
+            is_safe = False
+            reasons.append("Up 類別樣本數為 0")
+
+        # 檢查是否有類別 > 80% (寬鬆閾值，適應趨勢標籤數據)
+        if dist['down_pct'] > 0.80:
+            is_safe = False
+            reasons.append(f"Down 類別占比過高 ({dist['down_pct']:.1%} > 80%)")
+        if dist['neutral_pct'] > 0.80:
+            is_safe = False
+            reasons.append(f"Neutral 類別占比過高 ({dist['neutral_pct']:.1%} > 80%)")
+        if dist['up_pct'] > 0.80:
+            is_safe = False
+            reasons.append(f"Up 類別占比過高 ({dist['up_pct']:.1%} > 80%)")
+
+        # 計算偏差和 Neff
+        current_dist = (dist['down_pct'], dist['neutral_pct'], dist['up_pct'])
+        deviation = calculate_deviation(current_dist, target_dist, method='l2')
+        neff = calculate_neff(cumulative_stocks)
+
+        # 記錄為候選方案（無論是否達標或安全）
+        num_symbols = len(set(s['symbol'] for s in cumulative_stocks))
+        dates_used = sorted(set(s['date'] for s in cumulative_stocks))
+
+        candidate = {
+            'symbols': sorted(set(s['symbol'] for s in cumulative_stocks)),
+            'dates': dates_used,
+            'date_range': f"{dates_used[0]}-{dates_used[-1]}",
+            'num_dates': len(dates_used),
+            'num_stocks': num_symbols,
+            'stock_records': cumulative_stocks.copy(),
+            'total_records': len(cumulative_stocks),
+            'distribution': dist,
+            'deviation': deviation,
+            'neff': neff,
+            'is_safe': is_safe,
+            'is_sufficient': dist['total_samples'] >= min_samples,
+            'reasons': reasons
+        }
+
+        candidates.append(candidate)
+
+        # 達標即停（樣本數夠 + 安全）
+        if dist['total_samples'] >= min_samples and is_safe:
+            logging.info(f"  ✅ 達標！累積 {num_symbols} 檔股票，{dist['total_samples']:,} 樣本")
+            logging.info(f"     偏差: {deviation:.4f}, Neff: {neff:,.0f}")
+            break
+
+        # 調試信息
+        if dist['total_samples'] % 100000 < 50000 or not is_safe:  # 每 10 萬樣本或不安全時輸出
+            status = "✅" if is_safe else "⚠️"
+            logging.debug(f"  {status} {num_symbols:>3} 檔: {dist['total_samples']:>9,} 樣本, "
+                         f"偏差 {deviation:.4f}, Neff {neff:>10,.0f}")
+            if not is_safe:
+                logging.debug(f"      原因: {', '.join(reasons)}")
+
+    # 在所有候選中選擇最優解
+    valid_candidates = [c for c in candidates if c['is_safe']]
+    sufficient_candidates = [c for c in valid_candidates if c['is_sufficient']]
+
+    if sufficient_candidates:
+        # 有達標的安全方案，選 Neff 最大 + 偏差最小
+        best = max(sufficient_candidates, key=lambda x: (x['neff'], -x['deviation']))
+        best['status'] = 'success'
+        best['message'] = f"成功達標！Neff: {best['neff']:,.0f}, 偏差: {best['deviation']:.4f}"
+        logging.info(f"\n✅ {best['message']}")
+    elif valid_candidates:
+        # 沒有達標但有安全方案，選最接近目標的（警告）
+        best = max(valid_candidates, key=lambda x: (x['neff'], -x['deviation']))
+        best['status'] = 'warning'
+        best['message'] = (f"未達樣本門檻 ({best['distribution']['total_samples']:,} < {min_samples:,})，"
+                          f"返回最佳可行解（Neff: {best['neff']:,.0f}）")
+        logging.warning(f"\n⚠️  {best['message']}")
+    else:
+        # 完全無安全方案，選最安全的（錯誤）
+        best = min(candidates, key=lambda x: len(x['reasons']))
+        best['status'] = 'error'
+        best['message'] = f"無法找到符合安全閾值的方案！最接近方案問題: {', '.join(best['reasons'])}"
+        logging.error(f"\n❌ {best['message']}")
+
+    return best
+
 
 def smart_recommend_datasets(
     stocks: List[Dict],
@@ -392,48 +699,54 @@ def print_selection_report(selected: Dict, target_dist: Tuple[float, float, floa
     dist = selected['distribution']
 
     print("\n" + "="*100)
-    print("✅ 已選取數據集")
+    print("[SELECTED] 已選取數據集")
     print("="*100)
 
-    print(f"\n📋 方案描述: {selected['description']}")
-    print(f"📐 偏差度: {selected['deviation']:.4f}\n")
-
-    print("【日期列表】")
-    dates = selected['dates']
-    print(f"  範圍: {dates[0]} - {dates[-1]}")
-    print(f"  天數: {len(dates)}")
-    print(f"  明細: {', '.join(dates)}\n")
-
-    print("【個股列表】")
-    symbols = selected['symbols']
-    print(f"  數量: {len(symbols)} 檔（不重複）")
-    if len(symbols) <= 20:
-        print(f"  明細: {', '.join(symbols)}\n")
-    else:
-        print(f"  前20檔: {', '.join(symbols[:20])} ...")
-        print(f"  (完整列表請查看輸出 JSON)\n")
-
-    print("【檔案配對列表】")
-    print(f"  總記錄數: {selected['total_records']} 個（日期×股票配對）")
-    print("  說明: 每個配對對應一個 NPZ 檔案")
-
-    # 顯示前 10 個配對範例
-    stock_records = selected['stock_records']
-    print("  範例前10個:")
-    for i, record in enumerate(stock_records[:10], 1):
-        print(f"    {i:>2}. {record['date']}-{record['symbol']:<6} → {record['file_path']}")
-    if len(stock_records) > 10:
-        print(f"    ... (還有 {len(stock_records) - 10} 個配對，詳見 JSON)\n")
+    # 顯示方案描述和偏差度（如果存在）
+    if 'description' in selected:
+        print(f"\n[Description] {selected['description']}")
+    print(f"[Deviation] {selected['deviation']:.4f}")
+    if 'neff' in selected:
+        print(f"[Neff] {selected['neff']:,.0f}\n")
     else:
         print()
 
-    print("【總樣本數】")
-    print(f"  {dist['total_samples']:,} 個樣本（所有配對加總）\n")
+    print("[Date List]")
+    dates = selected['dates']
+    print(f"  Range: {dates[0]} - {dates[-1]}")
+    print(f"  Days: {len(dates)}")
+    print(f"  Details: {', '.join(dates)}\n")
 
-    print("【標籤分布】")
-    print(f"  Down:    {dist['down_count']:>12,} ({dist['down_pct']:>6.2%})  [目標: {target_dist[0]:.2%}, 偏差: {dist['down_pct'] - target_dist[0]:+.2%}]")
-    print(f"  Neutral: {dist['neutral_count']:>12,} ({dist['neutral_pct']:>6.2%})  [目標: {target_dist[1]:.2%}, 偏差: {dist['neutral_pct'] - target_dist[1]:+.2%}]")
-    print(f"  Up:      {dist['up_count']:>12,} ({dist['up_pct']:>6.2%})  [目標: {target_dist[2]:.2%}, 偏差: {dist['up_pct'] - target_dist[2]:+.2%}]")
+    print("[Stock List]")
+    symbols = selected['symbols']
+    print(f"  Count: {len(symbols)} stocks (unique)")
+    if len(symbols) <= 20:
+        print(f"  Details: {', '.join(symbols)}\n")
+    else:
+        print(f"  First 20: {', '.join(symbols[:20])} ...")
+        print("  (See full list in output JSON)\n")
+
+    print("[File Pairs]")
+    print(f"  Total: {selected['total_records']} records (date x symbol pairs)")
+    print("  Note: Each pair corresponds to one NPZ file")
+
+    # 顯示前 10 個配對範例
+    stock_records = selected['stock_records']
+    print("  Sample (first 10):")
+    for i, record in enumerate(stock_records[:10], 1):
+        print(f"    {i:>2}. {record['date']}-{record['symbol']:<6} -> {record['file_path']}")
+    if len(stock_records) > 10:
+        print(f"    ... ({len(stock_records) - 10} more pairs, see JSON)\n")
+    else:
+        print()
+
+    print("[Total Samples]")
+    print(f"  {dist['total_samples']:,} samples (sum of all pairs)\n")
+
+    print("[Label Distribution]")
+    print(f"  Down:    {dist['down_count']:>12,} ({dist['down_pct']:>6.2%})  [Target: {target_dist[0]:.2%}, Deviation: {dist['down_pct'] - target_dist[0]:+.2%}]")
+    print(f"  Neutral: {dist['neutral_count']:>12,} ({dist['neutral_pct']:>6.2%})  [Target: {target_dist[1]:.2%}, Deviation: {dist['neutral_pct'] - target_dist[1]:+.2%}]")
+    print(f"  Up:      {dist['up_count']:>12,} ({dist['up_pct']:>6.2%})  [Target: {target_dist[2]:.2%}, Deviation: {dist['up_pct'] - target_dist[2]:+.2%}]")
 
     print("\n" + "="*100 + "\n")
 
@@ -456,24 +769,31 @@ def save_selection_to_json(selected: Dict, output_path: str) -> None:
         for record in stock_records
     ]
 
+    # 按照 (日期, 股票代碼) 排序
+    file_list.sort(key=lambda x: (x['date'], x['symbol']))
+
     output_data = {
-        'description': selected['description'],
+        'description': selected.get('description', 'Minimal recommend result'),
         'date_range': selected['date_range'],
         'dates': selected['dates'],
         'num_dates': selected['num_dates'],
         'symbols': selected['symbols'],
         'num_stocks': selected['num_stocks'],
         'total_records': selected['total_records'],
-        'file_list': file_list,  # 🆕 完整的「日期+股票」配對列表
+        'file_list': file_list,  # 完整的「日期+股票」配對列表
         'distribution': selected['distribution'],
         'deviation': selected['deviation'],
-        'level': selected['level']
+        'level': selected.get('level', 'N/A'),
+        'neff': selected.get('neff', 0),
+        'status': selected.get('status', 'unknown'),
+        'mode': selected.get('mode', 'N/A'),
+        'max_days': selected.get('max_days', 'N/A')
     }
 
     with open(output_path, 'w', encoding='utf-8') as f:
         json.dump(output_data, f, ensure_ascii=False, indent=2)
 
-    logging.info(f"✅ 選取結果已保存到: {output_path}")
+    logging.info(f"[SAVED] 選取結果已保存到: {output_path}")
 
 
 # ============================================================
@@ -590,13 +910,15 @@ def main():
 
     parser.add_argument("--preprocessed-dir", required=True, help="預處理數據目錄")
     parser.add_argument("--mode", default="analyze",
-                       choices=["analyze", "smart_recommend", "interactive"],
-                       help="執行模式: analyze=分析全部, smart_recommend=自動推薦, interactive=互動選擇")
+                       choices=["analyze", "smart_recommend", "interactive", "minimal"],
+                       help="執行模式: analyze=分析全部, smart_recommend=自動推薦, interactive=互動選擇, minimal=最小化推薦（新版）")
     parser.add_argument("--start-date", help="起始日期 (YYYYMMDD)，例如: 20250901")
     parser.add_argument("--target-dist", default=None,
                        help="目標標籤分布 (down,neutral,up)，例如: 0.30,0.40,0.30。若未指定，則使用整體分布")
     parser.add_argument("--min-samples", type=int, default=100000,
                        help="最小樣本數（過濾掉太少的方案）")
+    parser.add_argument("--days", type=int, default=10,
+                       help="最大天數上限（minimal 模式專用，預設 10 天）")
     parser.add_argument("--output", help="輸出 JSON 檔案路徑")
 
     args = parser.parse_args()
@@ -681,7 +1003,64 @@ def main():
                 default_output = f"dataset_selection_{selected['date_range']}.json"
                 save_selection_to_json(selected, default_output)
 
-    print("✅ 完成\n")
+    # 模式 4: 最小化推薦（新版）
+    elif args.mode == "minimal":
+        # 解析目標分布（minimal 模式允許不指定，預設均勻分布）
+        if args.target_dist is None:
+            target_dist_minimal = None  # 使用均勻分布
+        else:
+            target_dist_minimal = tuple(map(float, args.target_dist.split(',')))
+            if len(target_dist_minimal) != 3 or abs(sum(target_dist_minimal) - 1.0) > 0.01:
+                logging.error(f"目標分布格式錯誤: {args.target_dist}，應為三個加總為1的數字")
+                return
+
+        # 調用最小化推薦演算法
+        best = smart_minimal_recommend(
+            stocks=stocks,
+            min_samples=args.min_samples,
+            target_dist=target_dist_minimal,
+            max_days=args.days
+        )
+
+        # 顯示結果
+        print("\n" + "="*100)
+        print("[Minimal Mode] 最小化推薦結果")
+        print("="*100)
+
+        # 狀態顯示
+        if best['status'] == 'success':
+            print(f"\n[SUCCESS] {best['message']}\n")
+        elif best['status'] == 'warning':
+            print(f"\n[WARNING] {best['message']}\n")
+        else:
+            print(f"\n[ERROR] {best['message']}\n")
+
+        # 使用現有的報告函數（與其他模式兼容）
+        # 需要轉換格式以符合 print_selection_report 的預期
+        final_target_dist = target_dist_minimal if target_dist_minimal else (1/3, 1/3, 1/3)
+
+        # 只有在有有效數據時才顯示詳細報告
+        if best.get('stock_records') and len(best['stock_records']) > 0:
+            print_selection_report(best, final_target_dist)
+        else:
+            print("\n[ERROR] 無有效數據可供顯示\n")
+
+        # 保存結果
+        if args.output:
+            # 添加額外信息到輸出
+            best_with_meta = best.copy()
+            best_with_meta['mode'] = 'minimal'
+            best_with_meta['max_days'] = args.days
+            save_selection_to_json(best_with_meta, args.output)
+        else:
+            # 預設輸出路徑
+            default_output = f"dataset_selection_minimal_{best['date_range']}.json"
+            best_with_meta = best.copy()
+            best_with_meta['mode'] = 'minimal'
+            best_with_meta['max_days'] = args.days
+            save_selection_to_json(best_with_meta, default_output)
+
+    print("[DONE] 完成\n")
 
 
 if __name__ == "__main__":

@@ -30,11 +30,11 @@ visualization:
 
 # ==================== 数据配置 ====================
 data:
-  # 数据路径
-  train: "data/processed_v6/npz/stock_embedding_train.npz"
-  val: "data/processed_v6/npz/stock_embedding_val.npz"
-  test: "data/processed_v6/npz/stock_embedding_test.npz"
-  norm_meta: "data/processed_v6/npz/normalization_meta.json"
+  # 数据路径（已修正為 V7）
+  train: "data/processed_v7/npz/stock_embedding_train.npz"
+  val: "data/processed_v7/npz/stock_embedding_val.npz"
+  test: "data/processed_v7/npz/stock_embedding_test.npz"
+  norm_meta: "data/processed_v7/npz/normalization_meta.json"
 
   # V5 标签配置（核心）
   v5_labels: true  # y: {0,1,2}（已转换）；保留 y_raw（如果有）
@@ -45,7 +45,7 @@ data:
     expected_values: [-1, 0, 1]  # y_raw 的期望值
 
   # 样本权重
-  use_sample_weights: false  # 启用逐样本权重
+  use_sample_weights: true  # 启用逐样本权重
   weights_normalize: "mean_to_1"  # 权重均值归一（或 "none"）
 
   # Stock IDs（可选，用于泛化测试）
@@ -62,7 +62,7 @@ dataloader:
 
   # 平衡采样器（暫時關閉，避免過度擬合少數類）
   balance_sampler:
-    enabled: false    # 關閉！改用 class_weights 處理不平衡
+    enabled: true    # 關閉！改用 class_weights 處理不平衡
     strategy: "inv_freq"  # 逆频率采样
 
 # ==================== 模型配置 ====================

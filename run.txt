@@ -8,13 +8,31 @@ python scripts/analyze_label_distribution.py --preprocessed-dir data/preprocesse
 python scripts/analyze_label_distribution.py --preprocessed-dir data/preprocessed_swing --mode analyze
 
 1.
-python scripts/analyze_label_distribution.py --preprocessed-dir data/preprocessed_swing --mode interactive --start-date 20250901 --min-samples 5000000 --output ./data/dataset_selection.json
+python scripts/analyze_label_distribution.py --preprocessed-dir data/preprocessed_swing --mode interactive --start-date 20250901 --min-samples 1000000 --output ./data/dataset_selection.json  --target-dist "0.32,0.43,0.25" 
 2.
 python scripts/analyze_label_distribution.py --preprocessed-dir data/preprocessed_swing --mode smart_recommend --start-date 20250901 --min-samples 1000000 --output dataset_selection.json
+
+# 基礎用法（均勻分布目標）
+python scripts/analyze_label_distribution.py --preprocessed-dir data/preprocessed_swing --mode minimal --min-samples 1000000 --days 10 --output ./data/dataset_selection.json
+
+# 指定目標分布
+python scripts/analyze_label_distribution.py \
+    --preprocessed-dir data/preprocessed_swing \
+    --mode minimal \
+    --min-samples 1000000 \
+    --target-dist "0.30,0.40,0.30" \
+    --days 15 \
+    --output results/dataset_selection_minimal.json
+
+
 
 
 ### 產生訓練資料
 python scripts/extract_tw_stock_data_v7.py    --preprocessed-dir ./data/preprocessed_swing  --output-dir ./data/processed_v7 --config configs/config_pro_v7_optimal.yaml --json ./data/dataset_selection.json
+
+
+### 訓練模型
+python scripts\train_deeplob_v5.py --config configs\train_v5.yaml --data-dir data\processed_v7\npz
 
 
 
@@ -35,7 +53,7 @@ python scripts\extract_tw_stock_data_v6.py --preprocessed-dir .\data\preprocesse
 python scripts\data_health_check.py --train-npz data\processed_v6\npz\stock_embedding_train.npz --val-npz data\processed_v6\npz\stock_embedding_val.npz --test-npz data\processed_v6\npz\stock_embedding_test.npz --output-dir data\processed_v6\health_check
 
 ### 訓練模型
-python scripts\train_deeplob_v5.py --config configs\train_v5.yaml --data-dir data\processed_v6\npz
+python scripts\train_deeplob_v5.py --config configs\train_v5.yaml --data-dir data\processed_v7\npz
 
 
 

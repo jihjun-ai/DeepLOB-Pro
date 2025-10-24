@@ -651,6 +651,14 @@ def sliding_windows_v7(
     val_X, val_y, val_weights, val_stock_ids = [], [], [], []
     test_X, test_y, test_weights, test_stock_ids = [], [], [], []
 
+    # 🆕 標準化配置日誌
+    norm_config = config.get('normalization', {})
+    norm_method = norm_config.get('method', 'rolling_zscore')
+    logging.info(f"標準化方法: {norm_method}")
+    if norm_method == 'rolling_zscore':
+        logging.info(f"  - window: {norm_config.get('window', 100)}")
+        logging.info(f"  - min_periods: {norm_config.get('min_periods', 20)}")
+
     logging.info(f"開始生成滑動窗口（{len(symbols)} 檔股票）...")
     for sym in tqdm(symbols, desc="生成滑窗", unit="股"):
         # 提取該股票的權重策略
@@ -681,6 +689,30 @@ def sliding_windows_v7(
 
         concat_features = np.vstack(all_features)  # (T_total, 20)
         concat_labels = np.hstack(all_labels)      # (T_total,)
+
+        # 🆕 V7 修復：添加標準化步驟（2025-10-24）
+        # 從配置讀取標準化參數
+        norm_config = config.get('normalization', {})
+        norm_method = norm_config.get('method', 'rolling_zscore')
+        norm_window = norm_config.get('window', 100)
+        norm_min_periods = norm_config.get('min_periods', 20)
+
+        # 應用標準化
+        if norm_method == 'rolling_zscore':
+            concat_features = zscore_apply(
+                concat_features,
+                mu=None,
+                sd=None,
+                method='rolling_zscore',
+                window=norm_window,
+                min_periods=norm_min_periods
+            )
+        elif norm_method == 'global':
+            # 全局標準化（備選）
+            mu, sd = zscore_fit(concat_features, method='global')
+            concat_features = zscore_apply(concat_features, mu, sd, method='global')
+        else:
+            logging.warning(f"⚠️ 未知的標準化方法 '{norm_method}'，跳過標準化")
 
         # 生成滑動窗口 (100 timesteps)
         T = len(concat_features)
