@@ -35,7 +35,12 @@ from sklearn.metrics import (
     accuracy_score, f1_score, precision_recall_fscore_support,
     confusion_matrix, classification_report
 )
+
+# ⭐ 修復 tkinter 多執行緒錯誤：必須在導入 pyplot 之前設置後端
+import matplotlib
+matplotlib.use('Agg')  # 非互動式後端，避免 tkinter 錯誤
 import matplotlib.pyplot as plt
+
 from tqdm import tqdm
 import itertools
 

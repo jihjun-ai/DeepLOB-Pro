@@ -23,7 +23,12 @@ import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+
+# ⭐ 修復 tkinter 多執行緒錯誤：必須在導入 pyplot 之前設置後端
+import matplotlib
+matplotlib.use('Agg')  # 非互動式後端，避免 tkinter 錯誤
 import matplotlib.pyplot as plt
+
 from typing import Optional, Tuple
 
 
