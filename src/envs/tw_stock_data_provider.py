@@ -283,11 +283,26 @@ class TaiwanStockDataProvider:
 
         try:
             with np.load(filepath) as data:
-                if 'price' in data.keys():
-                    logger.info(f"✅ 載入真實價格數據: {mode} 集")
-                    return data['price'][:]
+                # V7 數據使用 'prices' (複數), 向後兼容 'price' (單數)
+                if 'prices' in data.keys():
+                    prices_data = data['prices'][:]
+                    # V7 格式: (N, 100) - 每個樣本 100 個時間步的價格
+                    # 我們取最後一個時間步的價格 (用於交易決策)
+                    if prices_data.ndim == 2:
+                        logger.info(f"✅ 載入真實價格數據 (prices): {mode} 集, 形狀 {prices_data.shape}, 取最後時間步")
+                        return prices_data[:, -1]  # 取每個樣本的最後一個價格
+                    else:
+                        logger.info(f"✅ 載入真實價格數據 (prices): {mode} 集, 形狀 {prices_data.shape}")
+                        return prices_data
+                elif 'price' in data.keys():
+                    price_data = data['price'][:]
+                    logger.info(f"✅ 載入真實價格數據 (price): {mode} 集, 形狀 {price_data.shape}")
+                    # 舊格式應該是 (N,) 一維
+                    if price_data.ndim == 2:
+                        return price_data[:, -1]
+                    return price_data
                 else:
-                    logger.warning(f"⚠️  數據文件中沒有 'price' 字段: {filepath}")
+                    logger.warning(f"⚠️  數據文件中沒有 'price' 或 'prices' 字段: {filepath}")
                     return None
         except Exception as e:
             logger.error(f"❌ 載入價格數據失敗: {e}")

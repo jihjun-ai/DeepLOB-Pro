@@ -65,7 +65,7 @@ python scripts\train_deeplob_v5.py --config configs\train_v5.yaml --data-dir dat
 
 
 ## 分析deeplob 數據
-python scripts\monitor_deeplob.py --log-dir logs/deeplob_v5
+python scripts\monitor_deeplob.py --log-dir logs/logs/deeplob_v5_exp6b
 
 
 
