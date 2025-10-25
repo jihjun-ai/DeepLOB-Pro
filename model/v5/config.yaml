@@ -1,0 +1,481 @@
+run:
+  seed: 42
+labels:
+  num_classes: 3
+  class_names:
+  - !!python/object/new:ruamel.yaml.scalarstring.DoubleQuotedScalarString
+    - 下跌
+  - !!python/object/new:ruamel.yaml.scalarstring.DoubleQuotedScalarString
+    - 持平
+  - !!python/object/new:ruamel.yaml.scalarstring.DoubleQuotedScalarString
+    - 上漲
+  class_names_en:
+  - !!python/object/new:ruamel.yaml.scalarstring.DoubleQuotedScalarString
+    - down
+  - !!python/object/new:ruamel.yaml.scalarstring.DoubleQuotedScalarString
+    - stationary
+  - !!python/object/new:ruamel.yaml.scalarstring.DoubleQuotedScalarString
+    - up
+  class_ids:
+  - !!python/object/new:ruamel.yaml.scalarint.ScalarInt
+    args:
+    - 0
+    state:
+      _width: 1
+      _underscore: null
+  - 1
+  - 2
+  format: !!python/object/new:ruamel.yaml.scalarstring.DoubleQuotedScalarString
+  - v5
+  weight_calculation:
+    epsilon: !!python/object/new:ruamel.yaml.scalarfloat.ScalarFloat
+      args:
+      - 1.0e-06
+      state:
+        _width: 3
+        _prec: 1
+        _m_sign: false
+        _m_lead0: 0
+        _exp: e
+        _e_width: 2
+        _e_sign: true
+        _underscore: null
+    normalize: true
+visualization:
+  confusion_matrix:
+    normalize: true
+    dpi: 150
+    figsize:
+    - 8
+    - 6
+    cmap: !!python/object/new:ruamel.yaml.scalarstring.DoubleQuotedScalarString
+    - Blues
+data:
+  train: data\processed_v7\npz\stock_embedding_train.npz
+  val: data\processed_v7\npz\stock_embedding_val.npz
+  test: data\processed_v7\npz\stock_embedding_test.npz
+  norm_meta: data\processed_v7\npz\normalization_meta.json
+  v5_labels: true
+  y_raw_validation:
+    enabled: true
+    expected_values:
+    - -1
+    - !!python/object/new:ruamel.yaml.scalarint.ScalarInt
+      args:
+      - 0
+      state:
+        _width: 1
+        _underscore: null
+    - 1
+  use_sample_weights: false
+  weights_normalize: !!python/object/new:ruamel.yaml.scalarstring.DoubleQuotedScalarString
+  - mean_to_1
+  use_stock_ids: false
+  fail_on_missing_keys: true
+dataloader:
+  batch_size: 512
+  num_workers: 12
+  pin_memory: true
+  balance_sampler:
+    enabled: false
+    strategy: !!python/object/new:ruamel.yaml.scalarstring.DoubleQuotedScalarString
+    - inv_freq
+model:
+  arch: !!python/object/new:ruamel.yaml.scalarstring.DoubleQuotedScalarString
+  - DeepLOB
+  input:
+    shape:
+    - 100
+    - 20
+  num_classes: 3
+  conv1_filters: 48
+  conv2_filters: 48
+  conv3_filters: 48
+  lstm_hidden_size: 64
+  fc_hidden_size: 64
+  dropout: !!python/object/new:ruamel.yaml.scalarfloat.ScalarFloat
+    args:
+    - 0.7
+    state:
+      _width: 4
+      _prec: 1
+      _m_sign: false
+      _m_lead0: 1
+      _exp: null
+      _e_width: null
+      _e_sign: null
+      _underscore: null
+  embeddings:
+    enabled: false
+    num_stocks: 367
+    dim: 16
+    dropout: !!python/object/new:ruamel.yaml.scalarfloat.ScalarFloat
+      args:
+      - 0.1
+      state:
+        _width: 3
+        _prec: 1
+        _m_sign: false
+        _m_lead0: 1
+        _exp: null
+        _e_width: null
+        _e_sign: null
+        _underscore: null
+    weight_decay: !!python/object/new:ruamel.yaml.scalarfloat.ScalarFloat
+      args:
+      - 0.0001
+      state:
+        _width: 6
+        _prec: 1
+        _m_sign: false
+        _m_lead0: 4
+        _exp: null
+        _e_width: null
+        _e_sign: null
+        _underscore: null
+    max_norm: null
+    unk_strategy: !!python/object/new:ruamel.yaml.scalarstring.DoubleQuotedScalarString
+    - explicit_unk
+    feature_dropout:
+      p: !!python/object/new:ruamel.yaml.scalarfloat.ScalarFloat
+        args:
+        - 0.3
+        state:
+          _width: 3
+          _prec: 1
+          _m_sign: false
+          _m_lead0: 1
+          _exp: null
+          _e_width: null
+          _e_sign: null
+          _underscore: null
+    conditioning: !!python/object/new:ruamel.yaml.scalarstring.DoubleQuotedScalarString
+    - film
+loss:
+  type: !!python/object/new:ruamel.yaml.scalarstring.DoubleQuotedScalarString
+  - ce
+  class_weights: none
+  label_smoothing:
+    global: !!python/object/new:ruamel.yaml.scalarfloat.ScalarFloat
+      args:
+      - 0.015
+      state:
+        _width: 5
+        _prec: 1
+        _m_sign: false
+        _m_lead0: 2
+        _exp: null
+        _e_width: null
+        _e_sign: null
+        _underscore: null
+    flat_bonus: !!python/object/new:ruamel.yaml.scalarfloat.ScalarFloat
+      args:
+      - 0.0
+      state:
+        _width: 4
+        _prec: 1
+        _m_sign: false
+        _m_lead0: 3
+        _exp: null
+        _e_width: null
+        _e_sign: null
+        _underscore: null
+optim:
+  name: !!python/object/new:ruamel.yaml.scalarstring.DoubleQuotedScalarString
+  - adamw
+  lr: !!python/object/new:ruamel.yaml.scalarfloat.ScalarFloat
+    args:
+    - 2.5e-06
+    state:
+      _width: 9
+      _prec: 1
+      _m_sign: false
+      _m_lead0: 6
+      _exp: null
+      _e_width: null
+      _e_sign: null
+      _underscore: null
+  weight_decay: !!python/object/new:ruamel.yaml.scalarfloat.ScalarFloat
+    args:
+    - 0.001
+    state:
+      _width: 5
+      _prec: 1
+      _m_sign: false
+      _m_lead0: 3
+      _exp: null
+      _e_width: null
+      _e_sign: null
+      _underscore: null
+  grad_clip: !!python/object/new:ruamel.yaml.scalarfloat.ScalarFloat
+    args:
+    - 1.5
+    state:
+      _width: 3
+      _prec: 1
+      _m_sign: false
+      _m_lead0: 0
+      _exp: null
+      _e_width: null
+      _e_sign: null
+      _underscore: null
+  amp: false
+  use_bf16: false
+  betas:
+  - !!python/object/new:ruamel.yaml.scalarfloat.ScalarFloat
+    args:
+    - 0.9
+    state:
+      _width: 3
+      _prec: 1
+      _m_sign: false
+      _m_lead0: 1
+      _exp: null
+      _e_width: null
+      _e_sign: null
+      _underscore: null
+  - !!python/object/new:ruamel.yaml.scalarfloat.ScalarFloat
+    args:
+    - 0.999
+    state:
+      _width: 5
+      _prec: 1
+      _m_sign: false
+      _m_lead0: 1
+      _exp: null
+      _e_width: null
+      _e_sign: null
+      _underscore: null
+  eps: !!python/object/new:ruamel.yaml.scalarfloat.ScalarFloat
+    args:
+    - 1.0e-08
+    state:
+      _width: 3
+      _prec: 1
+      _m_sign: false
+      _m_lead0: 0
+      _exp: e
+      _e_width: 2
+      _e_sign: true
+      _underscore: null
+  amsgrad: false
+sched:
+  name: !!python/object/new:ruamel.yaml.scalarstring.DoubleQuotedScalarString
+  - cosine
+  warmup_ratio: !!python/object/new:ruamel.yaml.scalarfloat.ScalarFloat
+    args:
+    - 0.2
+    state:
+      _width: 4
+      _prec: 1
+      _m_sign: false
+      _m_lead0: 1
+      _exp: null
+      _e_width: null
+      _e_sign: null
+      _underscore: null
+  warmup_start_factor: !!python/object/new:ruamel.yaml.scalarfloat.ScalarFloat
+    args:
+    - 0.333
+    state:
+      _width: 5
+      _prec: 1
+      _m_sign: false
+      _m_lead0: 1
+      _exp: null
+      _e_width: null
+      _e_sign: null
+      _underscore: null
+  eta_min: !!python/object/new:ruamel.yaml.scalarfloat.ScalarFloat
+    args:
+    - 1.0e-06
+    state:
+      _width: 8
+      _prec: 1
+      _m_sign: false
+      _m_lead0: 6
+      _exp: null
+      _e_width: null
+      _e_sign: null
+      _underscore: null
+train:
+  epochs: 20
+  accumulate_steps: 1
+  early_stop:
+    metric: !!python/object/new:ruamel.yaml.scalarstring.DoubleQuotedScalarString
+    - val.f1_macro_weighted
+    patience: 2
+    mode: !!python/object/new:ruamel.yaml.scalarstring.DoubleQuotedScalarString
+    - max
+    min_delta: !!python/object/new:ruamel.yaml.scalarfloat.ScalarFloat
+      args:
+      - 0.0008
+      state:
+        _width: 6
+        _prec: 1
+        _m_sign: false
+        _m_lead0: 4
+        _exp: null
+        _e_width: null
+        _e_sign: null
+        _underscore: null
+eval:
+  group_split:
+    by_stock: true
+  metrics:
+    unweighted:
+    - !!python/object/new:ruamel.yaml.scalarstring.DoubleQuotedScalarString
+      - acc
+    - !!python/object/new:ruamel.yaml.scalarstring.DoubleQuotedScalarString
+      - f1_macro
+    - !!python/object/new:ruamel.yaml.scalarstring.DoubleQuotedScalarString
+      - per_class_pr_rc
+    - !!python/object/new:ruamel.yaml.scalarstring.DoubleQuotedScalarString
+      - confusion
+    weighted:
+    - !!python/object/new:ruamel.yaml.scalarstring.DoubleQuotedScalarString
+      - f1_macro
+    - !!python/object/new:ruamel.yaml.scalarstring.DoubleQuotedScalarString
+      - loss
+  breakdowns:
+  - !!python/object/new:ruamel.yaml.scalarstring.DoubleQuotedScalarString
+    - reasons
+  - !!python/object/new:ruamel.yaml.scalarstring.DoubleQuotedScalarString
+    - t_hit_bucket
+  - !!python/object/new:ruamel.yaml.scalarstring.DoubleQuotedScalarString
+    - ret_quantile
+  - !!python/object/new:ruamel.yaml.scalarstring.DoubleQuotedScalarString
+    - stock
+  thit_buckets:
+  - !!python/object/new:ruamel.yaml.scalarint.ScalarInt
+    args:
+    - 0
+    state:
+      _width: 1
+      _underscore: null
+  - 5
+  - 10
+  - 20
+  - 100
+  ret_quantiles:
+  - !!python/object/new:ruamel.yaml.scalarfloat.ScalarFloat
+    args:
+    - 0.8
+    state:
+      _width: 3
+      _prec: 1
+      _m_sign: false
+      _m_lead0: 1
+      _exp: null
+      _e_width: null
+      _e_sign: null
+      _underscore: null
+  - !!python/object/new:ruamel.yaml.scalarfloat.ScalarFloat
+    args:
+    - 0.9
+    state:
+      _width: 3
+      _prec: 1
+      _m_sign: false
+      _m_lead0: 1
+      _exp: null
+      _e_width: null
+      _e_sign: null
+      _underscore: null
+  - !!python/object/new:ruamel.yaml.scalarfloat.ScalarFloat
+    args:
+    - 0.95
+    state:
+      _width: 4
+      _prec: 1
+      _m_sign: false
+      _m_lead0: 1
+      _exp: null
+      _e_width: null
+      _e_sign: null
+      _underscore: null
+calibration:
+  enabled: true
+  type: !!python/object/new:ruamel.yaml.scalarstring.DoubleQuotedScalarString
+  - temperature
+  opt_metric: !!python/object/new:ruamel.yaml.scalarstring.DoubleQuotedScalarString
+  - weighted_nll
+  lr: !!python/object/new:ruamel.yaml.scalarfloat.ScalarFloat
+    args:
+    - 0.01
+    state:
+      _width: 4
+      _prec: 1
+      _m_sign: false
+      _m_lead0: 2
+      _exp: null
+      _e_width: null
+      _e_sign: null
+      _underscore: null
+  max_iter: 50
+inference:
+  decision: !!python/object/new:ruamel.yaml.scalarstring.DoubleQuotedScalarString
+  - argmax
+  cost_matrix:
+    path: null
+  hold_threshold: !!python/object/new:ruamel.yaml.scalarfloat.ScalarFloat
+    args:
+    - 0.0
+    state:
+      _width: 3
+      _prec: 1
+      _m_sign: false
+      _m_lead0: 2
+      _exp: null
+      _e_width: null
+      _e_sign: null
+      _underscore: null
+logging:
+  dir: !!python/object/new:ruamel.yaml.scalarstring.DoubleQuotedScalarString
+  - logs/deeplob_v5_exp6b
+  save_best_by: !!python/object/new:ruamel.yaml.scalarstring.DoubleQuotedScalarString
+  - val.f1_macro_weighted
+  artifacts:
+  - !!python/object/new:ruamel.yaml.scalarstring.DoubleQuotedScalarString
+    - model
+  - !!python/object/new:ruamel.yaml.scalarstring.DoubleQuotedScalarString
+    - norm_meta
+  - !!python/object/new:ruamel.yaml.scalarstring.DoubleQuotedScalarString
+    - label_mapping
+  - !!python/object/new:ruamel.yaml.scalarstring.DoubleQuotedScalarString
+    - calibration
+  - !!python/object/new:ruamel.yaml.scalarstring.DoubleQuotedScalarString
+    - cost_matrix
+  - !!python/object/new:ruamel.yaml.scalarstring.DoubleQuotedScalarString
+    - metrics_json
+  - !!python/object/new:ruamel.yaml.scalarstring.DoubleQuotedScalarString
+    - logs_csv
+  - !!python/object/new:ruamel.yaml.scalarstring.DoubleQuotedScalarString
+    - confmat_png
+  wandb:
+    enabled: false
+    project: !!python/object/new:ruamel.yaml.scalarstring.DoubleQuotedScalarString
+    - deeplob-v5-exp6b
+    entity: null
+safety_checks:
+  validate_label_set: true
+  validate_weights: true
+  validate_norm_meta: true
+  print_data_summary: true
+hardware:
+  device: !!python/object/new:ruamel.yaml.scalarstring.DoubleQuotedScalarString
+  - cuda
+  num_workers: 12
+  pin_memory: true
+  prefetch_factor: 4
+  persistent_workers: true
+  enable_tf32: true
+resume:
+  enabled: false
+  checkpoint_path: !!python/object/new:ruamel.yaml.scalarstring.DoubleQuotedScalarString
+  - checkpoints/v5/deeplob_v5_best.pth
+  load_optimizer: true
+misc:
+  save_last: true
+  output_dir: !!python/object/new:ruamel.yaml.scalarstring.DoubleQuotedScalarString
+  - checkpoints/v5

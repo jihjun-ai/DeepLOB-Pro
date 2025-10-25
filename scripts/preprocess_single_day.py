@@ -249,6 +249,7 @@ def parse_line(raw: str) -> Tuple[str, int, Optional[Dict[str, Any]]]:
     upper = to_float(parts[IDX_UPPER], 0.0)
     lower = to_float(parts[IDX_LOWER], 0.0)
     last_px = to_float(parts[IDX_LASTPRICE], 0.0)
+    last_vol = max(0, int(to_float(parts[IDX_LASTVOL], 0.0)))  # ⭐ NEW: parts[10]
     tv = max(0, int(to_float(parts[IDX_TV], 0.0)))
 
     # 價格限制檢查
@@ -267,6 +268,7 @@ def parse_line(raw: str) -> Tuple[str, int, Optional[Dict[str, Any]]]:
         "upper": upper,
         "lower": lower,
         "last_px": last_px,
+        "last_vol": last_vol,  # ⭐ NEW: 當次成交量
         "tv": tv,
         "raw": raw.strip()
     }
@@ -296,9 +298,9 @@ def aggregate_to_1hz(
     seq: List[Tuple[int, Dict[str,Any]]],
     reducer: str = 'last',
     ffill_limit: int = 120
-) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     """
-    1Hz 時間聚合（秒級）
+    1Hz 時間聚合（秒級）- 增強版：添加價格和成交量
 
     Args:
         seq: [(timestamp_int, record)] 已排序的事件序列
@@ -310,6 +312,9 @@ def aggregate_to_1hz(
         mids: (T,) 中間價
         bucket_event_count: (T,) 每秒事件數
         bucket_mask: (T,) 標記 {0: 單事件, 1: ffill, 2: 缺失, 3: 多事件聚合}
+        last_prices: (T,) 最新成交價 ⭐ NEW
+        last_volumes: (T,) 當次成交量 ⭐ NEW
+        total_volumes: (T,) 累計成交量 ⭐ NEW
     """
     global stats
 
@@ -347,10 +352,15 @@ def aggregate_to_1hz(
     mids_list = []
     event_counts = []
     masks = []
+    last_prices_list = []      # ⭐ NEW
+    last_volumes_list = []     # ⭐ NEW
+    total_volumes_list = []    # ⭐ NEW
 
     last_valid_feat = None
     last_valid_mid = None
     last_valid_idx = -1
+    last_valid_price = 0.0         # ⭐ NEW
+    last_valid_total_volume = 0    # ⭐ NEW
 
     for sec_idx, bucket in enumerate(buckets):
         event_count = len(bucket)
@@ -364,11 +374,17 @@ def aggregate_to_1hz(
                 # ffill
                 features_list.append(last_valid_feat)
                 mids_list.append(last_valid_mid)
+                last_prices_list.append(last_valid_price)         # ⭐ NEW: ffill 價格
+                last_volumes_list.append(0)                       # ⭐ NEW: 無成交量
+                total_volumes_list.append(last_valid_total_volume)  # ⭐ NEW: ffill 累計量
                 masks.append(1)  # ffill
             else:
                 # 缺失
                 features_list.append(np.zeros(20, dtype=np.float64))
                 mids_list.append(0.0)
+                last_prices_list.append(0.0)                      # ⭐ NEW
+                last_volumes_list.append(0)                       # ⭐ NEW
+                total_volumes_list.append(0)                      # ⭐ NEW
                 masks.append(2)  # missing
 
         elif event_count == 1:
@@ -376,13 +392,21 @@ def aggregate_to_1hz(
             rec = bucket[0]
             feat = rec['feat']
             mid = rec['mid']
+            last_price = rec.get('last_px', 0.0)      # ⭐ NEW
+            last_volume = rec.get('last_vol', 0)      # ⭐ NEW
+            total_volume = rec.get('tv', 0)           # ⭐ NEW
 
             features_list.append(feat)
             mids_list.append(mid)
+            last_prices_list.append(last_price)       # ⭐ NEW
+            last_volumes_list.append(last_volume)     # ⭐ NEW
+            total_volumes_list.append(total_volume)   # ⭐ NEW
             masks.append(0)  # native-single
 
             last_valid_feat = feat
             last_valid_mid = mid
+            last_valid_price = last_price          # ⭐ NEW
+            last_valid_total_volume = total_volume # ⭐ NEW
             last_valid_idx = sec_idx
 
         else:
@@ -422,12 +446,22 @@ def aggregate_to_1hz(
             else:
                 raise ValueError(f"Unknown reducer: {reducer}")
 
+            # ⭐ NEW: 聚合價格和成交量（多事件）
+            last_price = bucket[-1].get('last_px', 0.0)           # 最後一筆成交價
+            last_volume = sum(r.get('last_vol', 0) for r in bucket)  # 同秒內所有成交量加總
+            total_volume = max(r.get('tv', 0) for r in bucket)   # 最大累計量
+
             features_list.append(feat)
             mids_list.append(mid)
+            last_prices_list.append(last_price)       # ⭐ NEW
+            last_volumes_list.append(last_volume)     # ⭐ NEW
+            total_volumes_list.append(total_volume)   # ⭐ NEW
             masks.append(3)  # multi-event aggregated
 
             last_valid_feat = feat
             last_valid_mid = mid
+            last_valid_price = last_price          # ⭐ NEW
+            last_valid_total_volume = total_volume # ⭐ NEW
             last_valid_idx = sec_idx
 
     # 移除首尾連續缺失 + 移除中間的缺失桶（修復 mids=0 問題）
@@ -455,6 +489,9 @@ def aggregate_to_1hz(
     mids_list = mids_list[first_valid:last_valid+1]
     event_counts = event_counts[first_valid:last_valid+1]
     masks = masks[first_valid:last_valid+1]
+    last_prices_list = last_prices_list[first_valid:last_valid+1]      # ⭐ NEW
+    last_volumes_list = last_volumes_list[first_valid:last_valid+1]    # ⭐ NEW
+    total_volumes_list = total_volumes_list[first_valid:last_valid+1]  # ⭐ NEW
 
     # 進一步移除中間的缺失桶（mask=2，mids=0）
     # 保留 mask=0 (單事件), mask=1 (ffill), mask=3 (多事件)
@@ -464,17 +501,26 @@ def aggregate_to_1hz(
         return (np.zeros((0, 20), dtype=np.float64),
                 np.zeros((0,), dtype=np.float64),
                 np.zeros((0,), dtype=np.int32),
-                np.zeros((0,), dtype=np.int32))
+                np.zeros((0,), dtype=np.int32),
+                np.zeros((0,), dtype=np.float64),  # ⭐ NEW
+                np.zeros((0,), dtype=np.int64),    # ⭐ NEW
+                np.zeros((0,), dtype=np.int64))    # ⭐ NEW
 
     features_list = [features_list[i] for i in valid_indices]
     mids_list = [mids_list[i] for i in valid_indices]
     event_counts = [event_counts[i] for i in valid_indices]
     masks = [masks[i] for i in valid_indices]
+    last_prices_list = [last_prices_list[i] for i in valid_indices]      # ⭐ NEW
+    last_volumes_list = [last_volumes_list[i] for i in valid_indices]    # ⭐ NEW
+    total_volumes_list = [total_volumes_list[i] for i in valid_indices]  # ⭐ NEW
 
     features = np.stack(features_list, axis=0)
     mids = np.array(mids_list, dtype=np.float64)
     bucket_event_count = np.array(event_counts, dtype=np.int32)
     bucket_mask = np.array(masks, dtype=np.int32)
+    last_prices = np.array(last_prices_list, dtype=np.float64)      # ⭐ NEW
+    last_volumes = np.array(last_volumes_list, dtype=np.int64)      # ⭐ NEW
+    total_volumes = np.array(total_volumes_list, dtype=np.int64)    # ⭐ NEW
 
     # 驗證：確保沒有 mids=0（除非真實價格就是 0，但這不太可能）
     if (mids == 0).any():
@@ -485,16 +531,22 @@ def aggregate_to_1hz(
             return (np.zeros((0, 20), dtype=np.float64),
                     np.zeros((0,), dtype=np.float64),
                     np.zeros((0,), dtype=np.int32),
-                    np.zeros((0,), dtype=np.int32))
+                    np.zeros((0,), dtype=np.int32),
+                    np.zeros((0,), dtype=np.float64),  # ⭐ NEW
+                    np.zeros((0,), dtype=np.int64),    # ⭐ NEW
+                    np.zeros((0,), dtype=np.int64))    # ⭐ NEW
 
         features = features[valid_mids]
         mids = mids[valid_mids]
         bucket_event_count = bucket_event_count[valid_mids]
         bucket_mask = bucket_mask[valid_mids]
+        last_prices = last_prices[valid_mids]          # ⭐ NEW
+        last_volumes = last_volumes[valid_mids]        # ⭐ NEW
+        total_volumes = total_volumes[valid_mids]      # ⭐ NEW
 
     stats["aggregated_points"] += len(mids)
 
-    return features, mids, bucket_event_count, bucket_mask
+    return features, mids, bucket_event_count, bucket_mask, last_prices, last_volumes, total_volumes
 
 
 def calculate_intraday_volatility(mids: np.ndarray, date: str, symbol: str) -> Optional[Dict[str, Any]]:
@@ -982,6 +1034,9 @@ def save_preprocessed_npz(
     mids: np.ndarray,
     bucket_event_count: np.ndarray,
     bucket_mask: np.ndarray,
+    last_prices: np.ndarray,      # ⭐ NEW
+    last_volumes: np.ndarray,     # ⭐ NEW
+    total_volumes: np.ndarray,    # ⭐ NEW
     vol_stats: Dict,
     pass_filter: bool,
     filter_threshold: float,
@@ -1080,6 +1135,10 @@ def save_preprocessed_npz(
         'mids': mids.astype(np.float64),
         'bucket_event_count': bucket_event_count.astype(np.int32),
         'bucket_mask': bucket_mask.astype(np.int32),
+        'last_prices': last_prices.astype(np.float64),       # ⭐ NEW: 最新成交價
+        'last_volumes': last_volumes.astype(np.int64),       # ⭐ NEW: 當次成交量
+        'total_volumes': total_volumes.astype(np.int64),     # ⭐ NEW: 累計成交量
+        'volume_deltas': np.diff(total_volumes, prepend=total_volumes[0]).astype(np.int64),  # ⭐ NEW: 成交量變化
         'metadata': json.dumps(metadata, ensure_ascii=False)
     }
 
@@ -1205,8 +1264,8 @@ def process_single_day(txt_file: str, output_dir: str, config: Dict) -> Dict:
         rows.sort(key=lambda x: x[0])
         rows = dedup_by_timestamp_keep_last(rows)
 
-        # 1Hz 聚合（新版）
-        features, mids, bucket_event_count, bucket_mask = aggregate_to_1hz(
+        # 1Hz 聚合（增強版：包含價格和成交量）
+        features, mids, bucket_event_count, bucket_mask, last_prices, last_volumes, total_volumes = aggregate_to_1hz(
             rows,
             reducer='last',  # 可配置：'last', 'median', 'vwap-mid'
             ffill_limit=60  # A.1: 降低至 60 秒（避免長期 ffill 造成假訊號）
@@ -1228,7 +1287,8 @@ def process_single_day(txt_file: str, output_dir: str, config: Dict) -> Dict:
         vol_stats['multi_event_ratio'] = float((bucket_mask == 3).sum() / len(bucket_mask))
         vol_stats['max_gap_sec'] = int(np.max(np.diff(np.where(bucket_mask != 2)[0]))) if (bucket_mask != 2).sum() > 1 else 0
 
-        symbol_data[sym] = (features, mids, bucket_event_count, bucket_mask, vol_stats)
+        # ⭐ 修復：保存價格和成交量數據
+        symbol_data[sym] = (features, mids, bucket_event_count, bucket_mask, last_prices, last_volumes, total_volumes, vol_stats)
         daily_stats.append(vol_stats)
         stats["symbols_processed"] += 1
 
@@ -1253,7 +1313,8 @@ def process_single_day(txt_file: str, output_dir: str, config: Dict) -> Dict:
     logging.info("="*70)
 
     # Step 4: 應用過濾並保存
-    for sym, (features, mids, bucket_event_count, bucket_mask, vol_stats) in symbol_data.items():
+    # ⭐ 修復：解包價格和成交量數據
+    for sym, (features, mids, bucket_event_count, bucket_mask, last_prices, last_volumes, total_volumes, vol_stats) in symbol_data.items():
         pass_filter = vol_stats['range_pct'] >= filter_threshold
 
         if pass_filter:
@@ -1283,6 +1344,9 @@ def process_single_day(txt_file: str, output_dir: str, config: Dict) -> Dict:
             mids=mids,
             bucket_event_count=bucket_event_count,
             bucket_mask=bucket_mask,
+            last_prices=last_prices,      # ⭐ NEW
+            last_volumes=last_volumes,    # ⭐ NEW
+            total_volumes=total_volumes,  # ⭐ NEW
             vol_stats=vol_stats,
             pass_filter=pass_filter,
             filter_threshold=filter_threshold,

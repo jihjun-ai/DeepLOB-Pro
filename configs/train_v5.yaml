@@ -1,9 +1,9 @@
 # ===================================================================
-# DeepLOB V5 實驗 6：精準控制學習率與梯度
-# 目標：解決實驗 5 的 Epoch 6-10 劣化問題（梯度爆炸、Val Loss 發散）
-# 核心策略：降低學習率峰值 + 嚴格梯度控制 + 更早停止
-# 日期：2025-10-24
-# 修改歷程：實驗 5 → 實驗 6（10 個參數調整，見下方註釋）
+# DeepLOB V7 實驗 1：V7 數據專用配置
+# 目標：解決 V7 數據過擬合問題（Epoch 3 後 Val 惡化）
+# 核心策略：強正則化 + 慢學習 + 早停
+# 日期：2025-10-25
+# V7 數據特性：更乾淨、標籤一致性高 → 容易過擬合
 # ===================================================================
 
 # ==================== 運行配置 ====================
@@ -43,9 +43,8 @@ data:
     enabled: true
     expected_values: [-1, 0, 1]
 
-  # 【實驗 6 修改 1】關閉樣本權重（實驗 4b 驗證關閉效果更好）
-  # 修改歷程：實驗 5 (true) → 實驗 6 (false)
-  use_sample_weights: false  # 實驗 5: true
+  # V7 實驗 1: 保持關閉樣本權重
+  use_sample_weights: false
   weights_normalize: "mean_to_1"
 
   use_stock_ids: false
@@ -53,12 +52,12 @@ data:
 
 # ==================== DataLoader 配置 ====================
 dataloader:
-  # 【改動 2】增加 Batch Size（提升訓練穩定性）
-  batch_size: 512  # 384 → 512
+  # V7 實驗 1: 減小 Batch Size (更多梯度更新,減緩過擬合)
+  batch_size: 256  # 512 → 256 (降低 50%)
   num_workers: 12
   pin_memory: true
 
-  # 關閉平衡採樣器（避免過擬合）
+  # 關閉平衡採樣器
   balance_sampler:
     enabled: false
     strategy: "inv_freq"
@@ -72,18 +71,17 @@ model:
 
   num_classes: 3
 
-  # 【改動 3】增大卷積容量（提升特徵提取能力）
-  conv1_filters: 48  # 32 → 48
-  conv2_filters: 48  # 32 → 48
-  conv3_filters: 48  # 32 → 48
+  # V7 實驗 1: 減小模型容量 (降低過擬合風險)
+  conv1_filters: 32  # 48 → 32 (降回基準)
+  conv2_filters: 32  # 48 → 32
+  conv3_filters: 32  # 48 → 32
 
-  # 【改動 4】增大 LSTM/FC 容量（提升時序建模能力）
-  lstm_hidden_size: 64  # 32 → 64
-  fc_hidden_size: 64    # 32 → 64
+  # V7 實驗 1: 減小 LSTM/FC 容量
+  lstm_hidden_size: 48  # 64 → 48 (介於 32-64)
+  fc_hidden_size: 48    # 64 → 48
 
-  # 【實驗 6 修改 2】提高 Dropout（容量大需要更強正則化）
-  # 修改歷程：實驗 5 (0.65) → 實驗 6 (0.70)
-  dropout: 0.70  # 實驗 5: 0.65
+  # V7 實驗 1: 大幅提高 Dropout (V7 數據更易過擬合)
+  dropout: 0.75  # 0.70 → 0.75 (+7%)
 
   embeddings:
     enabled: false
@@ -101,34 +99,27 @@ model:
 loss:
   type: "ce"
 
-  # 【實驗 6 修改 3】關閉類別權重（實驗 4b 驗證關閉效果好）
-  # 修改歷程：實驗 5 ("auto") → 實驗 6 (none)
-  class_weights: none  # 實驗 5: "auto"
+  # V7 實驗 1: 保持關閉類別權重
+  class_weights: none
 
-  # 【實驗 6 修改 4】輕度提高標籤平滑
-  # 修改歷程：實驗 5 (0.01) → 實驗 6 (0.015)
+  # V7 實驗 1: 提高標籤平滑 (強正則化)
   label_smoothing:
-    global: 0.015  # 實驗 5: 0.01
+    global: 0.02  # 0.015 → 0.02 (+33%)
     flat_bonus: 0.00
 
 # ==================== 優化器配置 ====================
 optim:
   name: "adamw"
 
-  # 【實驗 6 修改 5】降低學習率（避免 Epoch 6-10 梯度爆炸）⭐ 核心修改
-  # 修改歷程：實驗 5 (3e-6) → 實驗 6 (2.5e-6, -16%)
-  # 理由：實驗 5 在 LR=4-5e-6 區間梯度爆炸（3.10→17.34），2.5e-6 是實驗 4b 成功點
-  lr: 0.0000025  # 實驗 5: 0.000003 (3e-6)
+  # V7 實驗 1: 大幅降低學習率 (慢學習,避免過擬合) ⭐ 核心修改
+  # V7 數據更乾淨 → 需要更小學習率
+  lr: 0.000001  # 2.5e-6 → 1e-6 (-60%)
 
-  # 【實驗 6 修改 6】提高 Weight Decay（配合大容量模型）
-  # 修改歷程：實驗 5 (0.0005) → 實驗 6 (0.001, +100%)
-  weight_decay: 0.001  # 實驗 5: 0.0005
+  # V7 實驗 1: 大幅提高 Weight Decay (強 L2 正則化) ⭐ 核心修改
+  weight_decay: 0.002  # 0.001 → 0.002 (+100%)
 
-  # 【實驗 6 修改 7】嚴格梯度裁剪（控制梯度爆炸）⭐ 核心修改
-  # 修改歷程：實驗 5 (2.0) → 實驗 6 (1.2, -40%) → 實驗 6b (1.5, 微調)
-  # 理由：實驗 5 梯度從 3.10 飆到 17.34，2.0 完全控制不住
-  # 實驗 6 結果：梯度最高 5.07，1.2 可能過嚴，放寬到 1.5
-  grad_clip: 1.5  # 實驗 6: 1.2 → 1.5 (ChatGPT 建議)
+  # V7 實驗 1: 放寬梯度裁剪 (LR 已降低,梯度應更小)
+  grad_clip: 2.0  # 1.5 → 2.0 (恢復寬鬆)
 
   amp: false
   use_bf16: false
@@ -141,33 +132,26 @@ optim:
 sched:
   name: "cosine"
 
-  # 【實驗 6 修改 8】縮短 Warmup（避免後期學習率過高）
-  # 修改歷程：實驗 5 (0.25, 5/20 epochs) → 實驗 6 (0.20, 4/20 epochs)
-  warmup_ratio: 0.20  # 實驗 5: 0.25
-  warmup_start_factor: 0.333  # 保持不變（起點 ~8.3e-7）
+  # V7 實驗 1: 延長 Warmup (更平滑的學習率上升)
+  warmup_ratio: 0.30  # 0.20 → 0.30 (6/20 epochs)
+  warmup_start_factor: 0.2  # 0.333 → 0.2 (起點更低: 2e-7)
 
-  # 【實驗 6 修改 9】提高最小學習率（避免降太低）
-  # 修改歷程：實驗 5 (5e-7) → 實驗 6 (8e-7, +60%) → 實驗 6b (1e-6, 微調)
-  # 實驗 6 結果：Epoch 4 達最佳，學習率仍在 2e-6，未觸及 eta_min
-  # ChatGPT 建議：提高到 1e-6（Cosine decay 目標）
-  eta_min: 0.000001  # 實驗 6: 8e-7 → 1e-6 (ChatGPT 建議)
+  # V7 實驗 1: 降低最小學習率 (配合低初始 LR)
+  eta_min: 0.0000003  # 1e-6 → 3e-7 (-70%)
 
 # ==================== 訓練配置 ====================
 train:
-  # 【改動 13】延長訓練期（給模型更多學習時間）
-  epochs: 20  # 10 → 20（容量增大需要更多訓練）
+  # V7 實驗 1: 縮短訓練期 (V7 過擬合快,不需要 20 epochs)
+  epochs: 15  # 20 → 15 (Epoch 3 已達峰值)
   accumulate_steps: 1
 
-  # 【實驗 6 修改 10】更激進的早停（Epoch 6 就該停）⭐ 核心修改
-  # 修改歷程：實驗 5 (patience=5, min_delta=0.0001) → 實驗 6 (patience=2, min_delta=0.0003) → 實驗 6b (min_delta=0.0008, ChatGPT 建議)
-  # 理由：實驗 5 在 Epoch 6 開始惡化，Patience=5 讓劣化持續了 5 個 epoch
-  # 實驗 6 結果：Epoch 4 最佳（Val F1=0.4890），Epoch 5-6 走弱（0.4791→0.4715）
-  # ChatGPT 建議：提高 min_delta 到 0.0008（更靈敏捕捉下降）
+  # V7 實驗 1: 極激進早停 ⭐ 核心修改
+  # Epoch 3 達最佳 → Patience=1 足夠
   early_stop:
     metric: "val.f1_macro_weighted"
-    patience: 2  # 實驗 5: 5
+    patience: 1  # 2 → 1 (Epoch 4 就停)
     mode: "max"
-    min_delta: 0.0008  # 實驗 6: 0.0003 → 0.0008 (ChatGPT 建議)
+    min_delta: 0.0005  # 0.0008 → 0.0005 (更敏感)
 
 # ==================== 評估配置 ====================
 eval:
@@ -199,7 +183,7 @@ inference:
 
 # ==================== 日誌配置 ====================
 logging:
-  dir: "logs/deeplob_v5_exp6b"  # 實驗 6 → 實驗 6b（微調版）
+  dir: "logs/deeplob_v7_exp1"
   save_best_by: "val.f1_macro_weighted"
 
   artifacts:
@@ -214,7 +198,7 @@ logging:
 
   wandb:
     enabled: false
-    project: "deeplob-v5-exp6b"  # 實驗 6 → 實驗 6b（微調版）
+    project: "deeplob-v7-exp1"
     entity: null
 
 # ==================== 安全檢查 ====================

@@ -1,0 +1,267 @@
+# ===================================================================
+# DeepLOB V5 實驗 6：精準控制學習率與梯度
+# 目標：解決實驗 5 的 Epoch 6-10 劣化問題（梯度爆炸、Val Loss 發散）
+# 核心策略：降低學習率峰值 + 嚴格梯度控制 + 更早停止
+# 日期：2025-10-24
+# 修改歷程：實驗 5 → 實驗 6（10 個參數調整，見下方註釋）
+# ===================================================================
+
+# ==================== 運行配置 ====================
+run:
+  seed: 42
+
+# ==================== 標籤配置 ====================
+labels:
+  num_classes: 3
+  class_names: ["下跌", "持平", "上漲"]
+  class_names_en: ["down", "stationary", "up"]
+  class_ids: [0, 1, 2]
+  format: "v5"
+
+  weight_calculation:
+    epsilon: 1.0e-6
+    normalize: true
+
+# ==================== 可視化配置 ====================
+visualization:
+  confusion_matrix:
+    normalize: true
+    dpi: 150
+    figsize: [8, 6]
+    cmap: "Blues"
+
+# ==================== 數據配置 ====================
+data:
+  train: "data/processed_v7/npz/stock_embedding_train.npz"
+  val: "data/processed_v7/npz/stock_embedding_val.npz"
+  test: "data/processed_v7/npz/stock_embedding_test.npz"
+  norm_meta: "data/processed_v7/npz/normalization_meta.json"
+
+  v5_labels: true
+
+  y_raw_validation:
+    enabled: true
+    expected_values: [-1, 0, 1]
+
+  # 【實驗 6 修改 1】關閉樣本權重（實驗 4b 驗證關閉效果更好）
+  # 修改歷程：實驗 5 (true) → 實驗 6 (false)
+  use_sample_weights: false  # 實驗 5: true
+  weights_normalize: "mean_to_1"
+
+  use_stock_ids: false
+  fail_on_missing_keys: true
+
+# ==================== DataLoader 配置 ====================
+dataloader:
+  # 【改動 2】增加 Batch Size（提升訓練穩定性）
+  batch_size: 512  # 384 → 512
+  num_workers: 12
+  pin_memory: true
+
+  # 關閉平衡採樣器（避免過擬合）
+  balance_sampler:
+    enabled: false
+    strategy: "inv_freq"
+
+# ==================== 模型配置 ====================
+model:
+  arch: "DeepLOB"
+
+  input:
+    shape: [100, 20]
+
+  num_classes: 3
+
+  # 【改動 3】增大卷積容量（提升特徵提取能力）
+  conv1_filters: 48  # 32 → 48
+  conv2_filters: 48  # 32 → 48
+  conv3_filters: 48  # 32 → 48
+
+  # 【改動 4】增大 LSTM/FC 容量（提升時序建模能力）
+  lstm_hidden_size: 64  # 32 → 64
+  fc_hidden_size: 64    # 32 → 64
+
+  # 【實驗 6 修改 2】提高 Dropout（容量大需要更強正則化）
+  # 修改歷程：實驗 5 (0.65) → 實驗 6 (0.70)
+  dropout: 0.70  # 實驗 5: 0.65
+
+  embeddings:
+    enabled: false
+    num_stocks: 367
+    dim: 16
+    dropout: 0.1
+    weight_decay: 0.0001
+    max_norm: null
+    unk_strategy: "explicit_unk"
+    feature_dropout:
+      p: 0.3
+    conditioning: "film"
+
+# ==================== 損失函數配置 ====================
+loss:
+  type: "ce"
+
+  # 【實驗 6 修改 3】關閉類別權重（實驗 4b 驗證關閉效果好）
+  # 修改歷程：實驗 5 ("auto") → 實驗 6 (none)
+  class_weights: none  # 實驗 5: "auto"
+
+  # 【實驗 6 修改 4】輕度提高標籤平滑
+  # 修改歷程：實驗 5 (0.01) → 實驗 6 (0.015)
+  label_smoothing:
+    global: 0.015  # 實驗 5: 0.01
+    flat_bonus: 0.00
+
+# ==================== 優化器配置 ====================
+optim:
+  name: "adamw"
+
+  # 【實驗 6 修改 5】降低學習率（避免 Epoch 6-10 梯度爆炸）⭐ 核心修改
+  # 修改歷程：實驗 5 (3e-6) → 實驗 6 (2.5e-6, -16%)
+  # 理由：實驗 5 在 LR=4-5e-6 區間梯度爆炸（3.10→17.34），2.5e-6 是實驗 4b 成功點
+  lr: 0.0000025  # 實驗 5: 0.000003 (3e-6)
+
+  # 【實驗 6 修改 6】提高 Weight Decay（配合大容量模型）
+  # 修改歷程：實驗 5 (0.0005) → 實驗 6 (0.001, +100%)
+  weight_decay: 0.001  # 實驗 5: 0.0005
+
+  # 【實驗 6 修改 7】嚴格梯度裁剪（控制梯度爆炸）⭐ 核心修改
+  # 修改歷程：實驗 5 (2.0) → 實驗 6 (1.2, -40%) → 實驗 6b (1.5, 微調)
+  # 理由：實驗 5 梯度從 3.10 飆到 17.34，2.0 完全控制不住
+  # 實驗 6 結果：梯度最高 5.07，1.2 可能過嚴，放寬到 1.5
+  grad_clip: 1.5  # 實驗 6: 1.2 → 1.5 (ChatGPT 建議)
+
+  amp: false
+  use_bf16: false
+
+  betas: [0.9, 0.999]
+  eps: 1.0e-8
+  amsgrad: false
+
+# ==================== 學習率調度器 ====================
+sched:
+  name: "cosine"
+
+  # 【實驗 6 修改 8】縮短 Warmup（避免後期學習率過高）
+  # 修改歷程：實驗 5 (0.25, 5/20 epochs) → 實驗 6 (0.20, 4/20 epochs)
+  warmup_ratio: 0.20  # 實驗 5: 0.25
+  warmup_start_factor: 0.333  # 保持不變（起點 ~8.3e-7）
+
+  # 【實驗 6 修改 9】提高最小學習率（避免降太低）
+  # 修改歷程：實驗 5 (5e-7) → 實驗 6 (8e-7, +60%) → 實驗 6b (1e-6, 微調)
+  # 實驗 6 結果：Epoch 4 達最佳，學習率仍在 2e-6，未觸及 eta_min
+  # ChatGPT 建議：提高到 1e-6（Cosine decay 目標）
+  eta_min: 0.000001  # 實驗 6: 8e-7 → 1e-6 (ChatGPT 建議)
+
+# ==================== 訓練配置 ====================
+train:
+  # 【改動 13】延長訓練期（給模型更多學習時間）
+  epochs: 20  # 10 → 20（容量增大需要更多訓練）
+  accumulate_steps: 1
+
+  # 【實驗 6 修改 10】更激進的早停（Epoch 6 就該停）⭐ 核心修改
+  # 修改歷程：實驗 5 (patience=5, min_delta=0.0001) → 實驗 6 (patience=2, min_delta=0.0003) → 實驗 6b (min_delta=0.0008, ChatGPT 建議)
+  # 理由：實驗 5 在 Epoch 6 開始惡化，Patience=5 讓劣化持續了 5 個 epoch
+  # 實驗 6 結果：Epoch 4 最佳（Val F1=0.4890），Epoch 5-6 走弱（0.4791→0.4715）
+  # ChatGPT 建議：提高 min_delta 到 0.0008（更靈敏捕捉下降）
+  early_stop:
+    metric: "val.f1_macro_weighted"
+    patience: 2  # 實驗 5: 5
+    mode: "max"
+    min_delta: 0.0008  # 實驗 6: 0.0003 → 0.0008 (ChatGPT 建議)
+
+# ==================== 評估配置 ====================
+eval:
+  group_split:
+    by_stock: true
+
+  metrics:
+    unweighted: ["acc", "f1_macro", "per_class_pr_rc", "confusion"]
+    weighted: ["f1_macro", "loss"]
+
+  breakdowns: ["reasons", "t_hit_bucket", "ret_quantile", "stock"]
+  thit_buckets: [0, 5, 10, 20, 100]
+  ret_quantiles: [0.8, 0.9, 0.95]
+
+# ==================== 校準配置 ====================
+calibration:
+  enabled: true
+  type: "temperature"
+  opt_metric: "weighted_nll"
+  lr: 0.01
+  max_iter: 50
+
+# ==================== 推理配置 ====================
+inference:
+  decision: "argmax"
+  cost_matrix:
+    path: null
+  hold_threshold: 0.0
+
+# ==================== 日誌配置 ====================
+logging:
+  dir: "logs/deeplob_v5_exp6b"  # 實驗 6 → 實驗 6b（微調版）
+  save_best_by: "val.f1_macro_weighted"
+
+  artifacts:
+    - "model"
+    - "norm_meta"
+    - "label_mapping"
+    - "calibration"
+    - "cost_matrix"
+    - "metrics_json"
+    - "logs_csv"
+    - "confmat_png"
+
+  wandb:
+    enabled: false
+    project: "deeplob-v5-exp6b"  # 實驗 6 → 實驗 6b（微調版）
+    entity: null
+
+# ==================== 安全檢查 ====================
+safety_checks:
+  validate_label_set: true
+  validate_weights: true
+  validate_norm_meta: true
+  print_data_summary: true
+
+# ==================== 硬體配置 ====================
+hardware:
+  device: "cuda"
+  num_workers: 12
+  pin_memory: true
+  prefetch_factor: 4
+  persistent_workers: true
+  enable_tf32: true
+
+# ==================== 續訓配置 ====================
+resume:
+  enabled: false
+  checkpoint_path: "checkpoints/v5/deeplob_v5_best.pth"
+  load_optimizer: true
+
+# ==================== 其他配置 ====================
+misc:
+  save_last: true
+  output_dir: "checkpoints/v5"
+
+# ===================================================================
+# 修改歷程總結（實驗 5 → 實驗 6）
+# ===================================================================
+# 詳細說明請參閱：docs/20251024-deeplob調參歷史.md - 實驗 6
+#
+# 核心改動（10 個參數）：
+# 1. use_sample_weights: true → false
+# 2. dropout: 0.65 → 0.70
+# 3. class_weights: "auto" → none
+# 4. label_smoothing.global: 0.01 → 0.015
+# 5. lr: 3e-6 → 2.5e-6 ⭐ 核心（避免梯度爆炸）
+# 6. weight_decay: 0.0005 → 0.001
+# 7. grad_clip: 2.0 → 1.2 ⭐ 核心（嚴格控制）
+# 8. warmup_ratio: 0.25 → 0.20
+# 9. eta_min: 5e-7 → 8e-7
+# 10. patience: 5 → 2, min_delta: 0.0001 → 0.0003 ⭐ 核心（更早停止）
+#
+# 訓練指令：
+# conda activate deeplob-pro
+# python scripts/train_deeplob_v5.py --config configs/train_v5.yaml
+# ===================================================================
