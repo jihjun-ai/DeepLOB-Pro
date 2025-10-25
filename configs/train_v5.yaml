@@ -229,21 +229,31 @@ misc:
   output_dir: "checkpoints/v5"
 
 # ===================================================================
-# 修改歷程總結（實驗 5 → 實驗 6）
+# V7 實驗 1 修改總結
 # ===================================================================
-# 詳細說明請參閱：docs/20251024-deeplob調參歷史.md - 實驗 6
+# 核心問題：V7 數據更乾淨 → 嚴重過擬合 (Epoch 3 後 Val 惡化)
 #
-# 核心改動（10 個參數）：
-# 1. use_sample_weights: true → false
-# 2. dropout: 0.65 → 0.70
-# 3. class_weights: "auto" → none
-# 4. label_smoothing.global: 0.01 → 0.015
-# 5. lr: 3e-6 → 2.5e-6 ⭐ 核心（避免梯度爆炸）
-# 6. weight_decay: 0.0005 → 0.001
-# 7. grad_clip: 2.0 → 1.2 ⭐ 核心（嚴格控制）
-# 8. warmup_ratio: 0.25 → 0.20
-# 9. eta_min: 5e-7 → 8e-7
-# 10. patience: 5 → 2, min_delta: 0.0001 → 0.0003 ⭐ 核心（更早停止）
+# 修改策略：強正則化 + 慢學習 + 早停
+#
+# 核心改動（12 個參數）：
+# 1. batch_size: 512 → 256 (-50%, 更多梯度更新)
+# 2. conv_filters: 48 → 32 (-33%, 降低容量)
+# 3. lstm_hidden_size: 64 → 48 (-25%)
+# 4. fc_hidden_size: 64 → 48 (-25%)
+# 5. dropout: 0.70 → 0.75 (+7%, 更強正則化) ⭐
+# 6. label_smoothing: 0.015 → 0.02 (+33%)
+# 7. lr: 2.5e-6 → 1e-6 (-60%, 慢學習) ⭐⭐⭐ 核心
+# 8. weight_decay: 0.001 → 0.002 (+100%, 強 L2) ⭐⭐⭐ 核心
+# 9. grad_clip: 1.5 → 2.0 (+33%, LR 低可放寬)
+# 10. warmup_ratio: 0.20 → 0.30 (+50%, 更平滑)
+# 11. eta_min: 1e-6 → 3e-7 (-70%)
+# 12. epochs: 20 → 15, patience: 2 → 1 ⭐⭐⭐ 核心
+#
+# 預期效果：
+# - Epoch 3-5 達最佳 (vs 目前 Epoch 3)
+# - Val Acc 52-55% (vs 目前 50.09%)
+# - Train-Val Gap < 5% (vs 目前 11.30%)
+# - 梯度 < 3.0 (vs 目前 5.12)
 #
 # 訓練指令：
 # conda activate deeplob-pro
