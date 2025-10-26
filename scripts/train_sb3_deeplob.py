@@ -12,28 +12,27 @@
 
 使用範例：
     # 完整訓練（1M steps，推薦，4-8 小時 RTX 5090）
-    python scripts/train_sb3_deeplob.py --timesteps 1000000
+    python scripts/train_sb3_deeplob.py
 
     # 快速測試（10K steps，10 分鐘）
-    python scripts/train_sb3_deeplob.py --timesteps 10000 --test
+    python scripts/train_sb3_deeplob.py --test
+
+    # 指定配置文件
+    python scripts/train_sb3_deeplob.py --config configs/sb3_deeplob_config.yaml
 
     # 指定 DeepLOB 檢查點
     python scripts/train_sb3_deeplob.py \
-        --deeplob-checkpoint checkpoints/v5/deeplob_v5_best.pth \
-        --timesteps 1000000
+        --deeplob-checkpoint checkpoints/v5/deeplob_v5_best.pth
 
     # 高性能訓練（大 batch size + 並行環境）
-    python scripts/train_sb3_deeplob.py \
-        --timesteps 2000000 \
-        --n-envs 4 \
-        --device cuda
+    python scripts/train_sb3_deeplob.py --n-envs 4 --device cuda
 
     # 監控訓練
     tensorboard --logdir logs/sb3_deeplob/
 
 作者: SB3-DeepLOB 專案團隊
-日期: 2025-10-24
-版本: v1.0
+日期: 2025-10-26
+版本: v2.0 (移除所有硬編碼，使用 YAMLManager)
 """
 
 import sys
@@ -45,7 +44,6 @@ project_root = Path(__file__).parent.parent
 sys.path.insert(0, str(project_root))
 
 import argparse
-import yaml
 import logging
 from datetime import datetime
 
@@ -64,6 +62,7 @@ from src.models.deeplob_feature_extractor import (
     DeepLOBExtractor,
     make_deeplob_policy_kwargs
 )
+from src.utils.yaml_manager import YAMLManager
 
 # 設置日誌
 logging.basicConfig(
@@ -74,14 +73,25 @@ logger = logging.getLogger(__name__)
 
 
 def load_config(config_path: str) -> dict:
-    """載入配置文件"""
-    with open(config_path, 'r', encoding='utf-8') as f:
-        config = yaml.safe_load(f)
-    return config
+    """載入配置文件（使用 YAMLManager）"""
+    try:
+        yaml_manager = YAMLManager(config_path)
+        config = yaml_manager.as_dict()
+        logger.info(f"✅ 配置載入成功: {config_path}")
+        return config
+    except FileNotFoundError:
+        raise FileNotFoundError(f"配置文件不存在: {config_path}")
+    except Exception as e:
+        raise RuntimeError(f"配置載入失敗: {e}")
 
 
-def verify_deeplob_checkpoint(checkpoint_path: str):
+def verify_deeplob_checkpoint(checkpoint_path: str, config: dict):
     """驗證 DeepLOB 檢查點存在"""
+    # 檢查是否需要驗證
+    if not config.get('validation', {}).get('verify_checkpoint', True):
+        logger.info("⏭️  跳過 DeepLOB 檢查點驗證")
+        return
+
     if not os.path.exists(checkpoint_path):
         raise FileNotFoundError(
             f"DeepLOB 檢查點不存在: {checkpoint_path}\n"
@@ -115,9 +125,15 @@ def make_env(env_config: dict, rank: int = 0):
     return _init
 
 
-def create_vec_env(config: dict, n_envs: int = 1, vec_type: str = "dummy"):
+def create_vec_env(config: dict, n_envs: int = None, vec_type: str = None):
     """創建向量化環境"""
     env_config = config['env_config']
+
+    # 從配置讀取預設值（如果命令行未指定）
+    if n_envs is None:
+        n_envs = config.get('vec_env', {}).get('n_envs', 1)
+    if vec_type is None:
+        vec_type = config.get('vec_env', {}).get('vec_type', 'dummy')
 
     if n_envs == 1:
         env = TaiwanLOBTradingEnv(env_config)
@@ -161,8 +177,8 @@ def create_callbacks(config: dict, eval_env):
             save_freq=checkpoint_config.get('save_freq', 50000),
             save_path=checkpoint_config.get('save_path', 'checkpoints/sb3/ppo_deeplob'),
             name_prefix=checkpoint_config.get('name_prefix', 'ppo_model'),
-            save_replay_buffer=False,
-            save_vecnormalize=False,
+            save_replay_buffer=checkpoint_config.get('save_replay_buffer', False),
+            save_vecnormalize=checkpoint_config.get('save_vecnormalize', False),
         )
         callbacks.append(checkpoint_callback)
         logger.info(f"✅ Checkpoint Callback (每 {checkpoint_config.get('save_freq', 50000)} steps)")
@@ -188,10 +204,14 @@ def create_callbacks(config: dict, eval_env):
         return None
 
 
-def create_ppo_deeplob_model(env, config: dict, deeplob_checkpoint: str, device: str = "cuda"):
+def create_ppo_deeplob_model(env, config: dict, deeplob_checkpoint: str, device: str = None):
     """創建整合 DeepLOB 的 PPO 模型"""
     ppo_config = config.get('ppo', {})
     deeplob_config = config.get('deeplob_extractor', {})
+
+    # 從配置讀取設備（如果命令行未指定）
+    if device is None:
+        device = config.get('device', {}).get('default', 'cuda')
 
     logger.info("🔨 構建 PPO + DeepLOB 模型")
 
@@ -250,8 +270,13 @@ def create_ppo_deeplob_model(env, config: dict, deeplob_checkpoint: str, device:
     return model
 
 
-def train_model(model, total_timesteps: int, callbacks=None, log_interval: int = 10):
+def train_model(model, config: dict, callbacks=None):
     """訓練模型"""
+    training_config = config.get('training', {})
+    total_timesteps = training_config.get('total_timesteps', 1000000)
+    log_interval = training_config.get('log_interval', 10)
+    progress_bar = training_config.get('progress_bar', True)
+
     logger.info("=" * 60)
     logger.info("🚀 開始訓練 (PPO + DeepLOB)")
     logger.info("=" * 60)
@@ -263,7 +288,7 @@ def train_model(model, total_timesteps: int, callbacks=None, log_interval: int =
         total_timesteps=total_timesteps,
         callback=callbacks,
         log_interval=log_interval,
-        progress_bar=True
+        progress_bar=progress_bar
     )
 
     end_time = datetime.now()
@@ -280,8 +305,9 @@ def train_model(model, total_timesteps: int, callbacks=None, log_interval: int =
 
 def save_final_model(model, config: dict):
     """保存最終模型"""
-    save_dir = config.get('training', {}).get('checkpoint_dir', 'checkpoints/sb3/ppo_deeplob')
-    model_name = config.get('training', {}).get('final_model_name', 'ppo_deeplob_final')
+    training_config = config.get('training', {})
+    save_dir = training_config.get('checkpoint_dir', 'checkpoints/sb3/ppo_deeplob')
+    model_name = training_config.get('final_model_name', 'ppo_deeplob_final')
 
     os.makedirs(save_dir, exist_ok=True)
     save_path = os.path.join(save_dir, model_name)
@@ -292,111 +318,145 @@ def save_final_model(model, config: dict):
     return save_path
 
 
+def apply_test_mode(config: dict):
+    """應用測試模式配置"""
+    test_config = config.get('test_mode', {})
+
+    # 更新訓練配置
+    config['training']['total_timesteps'] = test_config.get('total_timesteps', 10000)
+    config['callbacks']['checkpoint']['save_freq'] = test_config.get('save_freq', 5000)
+    config['callbacks']['eval']['eval_freq'] = test_config.get('eval_freq', 5000)
+    config['callbacks']['eval']['n_eval_episodes'] = test_config.get('n_eval_episodes', 3)
+    config['ppo']['n_steps'] = test_config.get('n_steps', 512)
+    config['ppo']['batch_size'] = test_config.get('batch_size', 32)
+
+    logger.info("🧪 測試模式已啟用")
+    logger.info(f"  - 訓練步數: {config['training']['total_timesteps']:,}")
+    logger.info(f"  - Checkpoint 頻率: {config['callbacks']['checkpoint']['save_freq']:,}")
+    logger.info(f"  - 評估頻率: {config['callbacks']['eval']['eval_freq']:,}")
+
+
+def show_next_steps(config: dict):
+    """顯示訓練完成後的下一步建議"""
+    if not config.get('output', {}).get('show_next_steps', True):
+        return
+
+    output_config = config.get('output', {})
+    tensorboard_log = config.get('training', {}).get('tensorboard_log', 'logs/sb3_deeplob')
+    best_model_path = output_config.get('best_model_path', 'checkpoints/sb3/ppo_deeplob/best_model')
+
+    logger.info("\n" + "=" * 60)
+    logger.info("🎉 訓練流程完成")
+    logger.info("=" * 60)
+    logger.info(f"✅ 日誌目錄: {tensorboard_log}")
+    logger.info("\n下一步:")
+    logger.info(f"  1. 查看訓練日誌: tensorboard --logdir {tensorboard_log}")
+    logger.info(f"  2. 評估最佳模型: python scripts/evaluate_sb3.py --model {best_model_path}")
+    logger.info(f"  3. 開始超參數優化（階段三）")
+
+
 def main():
     parser = argparse.ArgumentParser(description='PPO + DeepLOB 完整訓練')
-    parser.add_argument('--config', type=str, default='configs/sb3_config.yaml',
+    parser.add_argument('--config', type=str, default='configs/sb3_deeplob_config.yaml',
                       help='配置文件路徑')
-    parser.add_argument('--deeplob-checkpoint', type=str,
-                      default='checkpoints/v5/deeplob_v5_best.pth',
-                      help='DeepLOB 檢查點路徑')
+    parser.add_argument('--deeplob-checkpoint', type=str, default=None,
+                      help='DeepLOB 檢查點路徑（覆蓋配置文件）')
     parser.add_argument('--timesteps', type=int, default=None,
                       help='訓練步數（覆蓋配置文件）')
-    parser.add_argument('--device', type=str, default='cuda',
-                      help='設備: cuda / cpu')
+    parser.add_argument('--device', type=str, default=None,
+                      help='設備: cuda / cpu（覆蓋配置文件）')
     parser.add_argument('--test', action='store_true',
                       help='測試模式（快速驗證流程）')
-    parser.add_argument('--n-envs', type=int, default=1,
-                      help='並行環境數量')
-    parser.add_argument('--vec-type', type=str, default='dummy',
-                      help='向量化類型: dummy / subproc')
+    parser.add_argument('--n-envs', type=int, default=None,
+                      help='並行環境數量（覆蓋配置文件）')
+    parser.add_argument('--vec-type', type=str, default=None,
+                      help='向量化類型: dummy / subproc（覆蓋配置文件）')
 
     args = parser.parse_args()
 
     logger.info("=" * 60)
-    logger.info("🚀 PPO + DeepLOB 完整訓練腳本")
+    logger.info("🚀 PPO + DeepLOB 完整訓練腳本 v2.0")
     logger.info("=" * 60)
-
-    # 檢查 CUDA
-    if args.device == 'cuda' and not torch.cuda.is_available():
-        logger.warning("⚠️  CUDA 不可用，改用 CPU")
-        args.device = 'cpu'
-    else:
-        logger.info(f"✅ 使用設備: {args.device}")
-        if args.device == 'cuda':
-            logger.info(f"  - GPU: {torch.cuda.get_device_name(0)}")
-            total_memory = torch.cuda.get_device_properties(0).total_memory / 1e9
-            logger.info(f"  - 總顯存: {total_memory:.2f} GB")
 
     try:
         # 1. 載入配置
         logger.info(f"\n📄 載入配置: {args.config}")
         config = load_config(args.config)
 
-        # 測試模式
-        if args.test:
-            logger.info("🧪 測試模式啟用")
-            test_config = config.get('test_mode', {})
-            config['training']['total_timesteps'] = test_config.get('total_timesteps', 10000)
-            config['callbacks']['checkpoint']['save_freq'] = test_config.get('save_freq', 5000)
-            config['callbacks']['eval']['eval_freq'] = test_config.get('eval_freq', 5000)
-            config['ppo']['n_steps'] = test_config.get('n_steps', 512)
-            config['ppo']['batch_size'] = test_config.get('batch_size', 32)
+        # 顯示專案信息
+        project_info = config.get('project', {})
+        if project_info:
+            logger.info(f"  - 專案: {project_info.get('name', 'N/A')}")
+            logger.info(f"  - 版本: {project_info.get('version', 'N/A')}")
+            logger.info(f"  - 描述: {project_info.get('description', 'N/A')}")
 
-        # 命令行參數覆蓋
+        # 2. 應用命令行參數覆蓋
+        if args.test:
+            apply_test_mode(config)
+
         if args.timesteps is not None:
             config['training']['total_timesteps'] = args.timesteps
+            logger.info(f"⚙️  覆蓋訓練步數: {args.timesteps:,}")
 
-        total_timesteps = config['training']['total_timesteps']
-        logger.info(f"✅ 配置載入成功（訓練 {total_timesteps:,} steps）")
+        # 3. 確定 DeepLOB 檢查點路徑
+        deeplob_checkpoint = args.deeplob_checkpoint or config['env_config'].get('deeplob_checkpoint')
+        if not deeplob_checkpoint:
+            raise ValueError("未指定 DeepLOB 檢查點路徑")
 
-        # 2. 驗證 DeepLOB 檢查點
+        # 4. 確定設備
+        device = args.device
+        if device is None:
+            device = config.get('device', {}).get('default', 'cuda')
+
+        # 檢查 CUDA
+        auto_fallback = config.get('device', {}).get('auto_fallback', True)
+        if device == 'cuda' and not torch.cuda.is_available():
+            if auto_fallback:
+                logger.warning("⚠️  CUDA 不可用，自動回退到 CPU")
+                device = 'cpu'
+            else:
+                raise RuntimeError("CUDA 不可用且未啟用自動回退")
+
+        logger.info(f"✅ 使用設備: {device}")
+        if device == 'cuda':
+            logger.info(f"  - GPU: {torch.cuda.get_device_name(0)}")
+            total_memory = torch.cuda.get_device_properties(0).total_memory / 1e9
+            logger.info(f"  - 總顯存: {total_memory:.2f} GB")
+
+        # 5. 驗證 DeepLOB 檢查點
         logger.info(f"\n🔍 驗證 DeepLOB 檢查點")
-        verify_deeplob_checkpoint(args.deeplob_checkpoint)
+        verify_deeplob_checkpoint(deeplob_checkpoint, config)
 
-        # 3. 創建訓練環境
+        # 6. 創建訓練環境
         logger.info("\n🏗️  創建訓練環境")
         env = create_vec_env(config, n_envs=args.n_envs, vec_type=args.vec_type)
 
-        # 4. 創建評估環境
+        # 7. 創建評估環境
         logger.info("\n🏗️  創建評估環境")
         eval_env = create_eval_env(config)
 
-        # 5. 創建回調
+        # 8. 創建回調
         logger.info("\n🔔 設置訓練回調")
         callbacks = create_callbacks(config, eval_env)
 
-        # 6. 創建 PPO + DeepLOB 模型
+        # 9. 創建 PPO + DeepLOB 模型
         logger.info("\n🤖 創建 PPO + DeepLOB 模型")
         model = create_ppo_deeplob_model(
             env,
             config,
-            deeplob_checkpoint=args.deeplob_checkpoint,
-            device=args.device
+            deeplob_checkpoint=deeplob_checkpoint,
+            device=device
         )
 
-        # 7. 開始訓練
-        model = train_model(
-            model,
-            total_timesteps=total_timesteps,
-            callbacks=callbacks,
-            log_interval=config.get('training', {}).get('log_interval', 10)
-        )
+        # 10. 開始訓練
+        model = train_model(model, config, callbacks=callbacks)
 
-        # 8. 保存最終模型
+        # 11. 保存最終模型
         logger.info("\n💾 保存最終模型")
         save_path = save_final_model(model, config)
 
-        # 9. 總結
-        logger.info("\n" + "=" * 60)
-        logger.info("🎉 訓練流程完成")
-        logger.info("=" * 60)
-        logger.info(f"✅ 最終模型: {save_path}.zip")
-        logger.info(f"✅ 最佳模型: checkpoints/sb3/ppo_deeplob/best_model.zip")
-        logger.info(f"✅ 日誌目錄: {config.get('training', {}).get('tensorboard_log', 'logs/sb3_deeplob')}")
-        logger.info("\n下一步:")
-        logger.info(f"  1. 查看訓練日誌: tensorboard --logdir {config.get('training', {}).get('tensorboard_log', 'logs/sb3_deeplob')}")
-        logger.info(f"  2. 評估最佳模型: python scripts/evaluate_sb3.py --model checkpoints/sb3/ppo_deeplob/best_model")
-        logger.info(f"  3. 開始超參數優化（階段三）")
+        # 12. 顯示下一步建議
+        show_next_steps(config)
 
         return 0
 

@@ -1,0 +1,249 @@
+# ===================================================================
+# DeepLOB V5 實驗 6：降低正則化以產生高信心預測 ⭐⭐⭐⭐⭐
+# 目標：修復模型過度保守問題（永遠不給出 ≥0.8 信心預測）
+# 核心策略：降低 dropout + label smoothing + weight decay
+# 日期：2025-10-25
+# V5 實驗 5 問題：校準後仍無高信心預測 (Temperature 1.48)
+# 根本原因：過度正則化抑制了模型信心輸出
+# 預期：高信心區 (≥0.8) 有 10-20% 樣本，準確率 70%+
+# ===================================================================
+
+# ==================== 運行配置 ====================
+run:
+  seed: 42
+
+# ==================== 標籤配置 ====================
+labels:
+  num_classes: 3
+  class_names: ["下跌", "持平", "上漲"]
+  class_names_en: ["down", "stationary", "up"]
+  class_ids: [0, 1, 2]
+  format: "v5"
+
+  weight_calculation:
+    epsilon: 1.0e-6
+    normalize: true
+
+# ==================== 可視化配置 ====================
+visualization:
+  confusion_matrix:
+    normalize: true
+    dpi: 150
+    figsize: [8, 6]
+    cmap: "Blues"
+
+# ==================== 數據配置 ====================
+data:
+  train: "data/processed_v7/npz/stock_embedding_train.npz"
+  val: "data/processed_v7/npz/stock_embedding_val.npz"
+  test: "data/processed_v7/npz/stock_embedding_test.npz"
+  norm_meta: "data/processed_v7/npz/normalization_meta.json"
+
+  v5_labels: true
+
+  y_raw_validation:
+    enabled: true
+    expected_values: [-1, 0, 1]
+
+  use_sample_weights: false
+  weights_normalize: "mean_to_1"
+
+  use_stock_ids: false
+  fail_on_missing_keys: true
+
+# ==================== DataLoader 配置 ====================
+dataloader:
+  # V5 實驗 6: 保持 batch 160
+  batch_size: 160
+  num_workers: 12
+  pin_memory: true
+
+  balance_sampler:
+    enabled: false
+    strategy: "inv_freq"
+
+# ==================== 模型配置 ====================
+model:
+  arch: "DeepLOB"
+
+  input:
+    shape: [100, 20]
+
+  num_classes: 3
+
+  # 保持模型容量
+  conv1_filters: 32
+  conv2_filters: 32
+  conv3_filters: 32
+
+  lstm_hidden_size: 48
+  fc_hidden_size: 48
+
+  # V5 實驗 6: 大幅降低 Dropout ⭐⭐⭐⭐⭐
+  dropout: 0.65  # 實驗5: 0.78→0.65 (-17%, 允許更高信心輸出)
+
+  embeddings:
+    enabled: false
+
+# ==================== 損失函數配置 ====================
+loss:
+  type: "ce"
+
+  class_weights: none
+
+  # V5 實驗 6: 大幅降低標籤平滑 ⭐⭐⭐⭐⭐
+  label_smoothing:
+    global: 0.01  # 實驗5: 0.028→0.01 (-64%, 允許更高信心輸出)
+    flat_bonus: 0.00
+
+# ==================== 優化器配置 ====================
+optim:
+  name: "adamw"
+
+  # V5 實驗 6: 保持學習率
+  lr: 0.00000073
+
+  # V5 實驗 6: 降低 Weight Decay ⭐⭐⭐
+  weight_decay: 0.002  # 實驗5: 0.0029→0.002 (-31%, 減少正則化)
+
+  # V5 實驗 6: 放寬梯度裁剪
+  grad_clip: 2.0  # 實驗5: 1.6→2.0 (+25%, 允許更大梯度)
+
+  amp: false
+  use_bf16: false
+
+  betas: [0.9, 0.999]
+  eps: 1.0e-8
+  amsgrad: false
+
+# ==================== 學習率調度器 ====================
+sched:
+  name: "cosine"
+
+  warmup_ratio: 0.38
+  warmup_start_factor: 0.16
+
+  eta_min: 0.00000021
+
+# ==================== 訓練配置 ====================
+train:
+  epochs: 22
+  accumulate_steps: 1
+
+  early_stop:
+    metric: "val.f1_macro_weighted"
+    patience: 2
+    mode: "max"
+    min_delta: 0.0003
+
+# ==================== 評估配置 ====================
+eval:
+  group_split:
+    by_stock: true
+
+  metrics:
+    unweighted: ["acc", "f1_macro", "per_class_pr_rc", "confusion"]
+    weighted: ["f1_macro", "loss"]
+
+  breakdowns: ["reasons", "t_hit_bucket", "ret_quantile", "stock"]
+  thit_buckets: [0, 5, 10, 20, 100]
+  ret_quantiles: [0.8, 0.9, 0.95]
+
+# ==================== 校準配置 ====================
+calibration:
+  enabled: true
+  type: "temperature"
+  opt_metric: "weighted_nll"
+  lr: 0.01
+  max_iter: 50
+
+# ==================== 推理配置 ====================
+inference:
+  decision: "argmax"
+  cost_matrix:
+    path: null
+  hold_threshold: 0.0
+
+# ==================== 日誌配置 ====================
+logging:
+  dir: "logs/deeplob_v5_exp6"
+  save_best_by: "val.f1_macro_weighted"
+
+  artifacts:
+    - "model"
+    - "norm_meta"
+    - "label_mapping"
+    - "calibration"
+    - "cost_matrix"
+    - "metrics_json"
+    - "logs_csv"
+    - "confmat_png"
+
+  wandb:
+    enabled: false
+    project: "deeplob-v5-exp6"
+    entity: null
+
+# ==================== 安全檢查 ====================
+safety_checks:
+  validate_label_set: true
+  validate_weights: true
+  validate_norm_meta: true
+  print_data_summary: true
+
+# ==================== 硬體配置 ====================
+hardware:
+  device: "cuda"
+  num_workers: 12
+  pin_memory: true
+  prefetch_factor: 4
+  persistent_workers: true
+  enable_tf32: true
+
+# ==================== 續訓配置 ====================
+resume:
+  enabled: false
+  checkpoint_path: "checkpoints/v5/deeplob_v5_best.pth"
+  load_optimizer: true
+
+# ==================== 其他配置 ====================
+misc:
+  save_last: true
+  output_dir: "checkpoints/v5"
+
+# ===================================================================
+# V5 實驗 6 配置總結 (降低正則化) ⭐⭐⭐⭐⭐
+# ===================================================================
+# 背景:
+# - V5 實驗 5: Val Acc 50.24%, 但模型從不給出 ≥0.8 信心預測
+# - 分桶評估: 0.7-0.8 區間 93.3% 準確率 (僅 104 樣本)
+# - Temperature Scaling: 1.48 (非常扁平) 校準後仍無高信心預測
+# - 根本原因: 過度正則化 (dropout 0.78, label_smoothing 0.028)
+#
+# V5 實驗 6 策略 (降低正則化):
+# 1. dropout: 0.78 → 0.65 (-17%) ⭐⭐⭐⭐⭐
+# 2. label_smoothing: 0.028 → 0.01 (-64%) ⭐⭐⭐⭐⭐
+# 3. weight_decay: 0.0029 → 0.002 (-31%) ⭐⭐⭐
+# 4. grad_clip: 1.6 → 2.0 (+25%)
+# 5. 其他參數保持不變
+#
+# 預期效果:
+# - Val Acc: 50-52% (可能略降，但不是目標)
+# - 高信心區 (≥0.8): 10-20% 樣本
+# - 高信心區準確率: 70-80%
+# - Temperature: 1.0-1.2 (更接近標準)
+#
+# 成功標準:
+# - 高信心區 (≥0.8) 有至少 5% 樣本
+# - 高信心區準確率 ≥ 70%
+# - 若達成 → 可用於 RL 訓練
+#
+# 訓練指令:
+# conda activate deeplob-pro
+# python scripts/train_deeplob_v5.py --config configs/train_v5_exp6.yaml
+#
+# 訓練後評估:
+# python scripts/evaluate_deeplob_by_confidence.py \
+#     --checkpoint checkpoints/v5/deeplob_v5_exp6_best.pth \
+#     --data-dir data/processed_v7/npz
+# ===================================================================

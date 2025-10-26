@@ -1,0 +1,270 @@
+# Stable-Baselines3 PPO + DeepLOB 完整訓練配置
+#
+# 此配置文件用於 train_sb3_deeplob.py 訓練腳本
+# 所有參數統一由 YAML 管理，無硬編碼
+#
+# 作者: SB3-DeepLOB 專案團隊
+# 日期: 2025-10-26
+# 版本: v2.0
+
+# ===== 專案資訊 =====
+project:
+  name: "SB3-DeepLOB"
+  version: "2.0"
+  description: "PPO + DeepLOB 雙層學習架構 - 台股高頻交易"
+  author: "SB3-DeepLOB Team"
+
+# ===== 環境配置 =====
+env_config:
+  # 數據路徑
+  data_dir: "data/processed_v7/npz"
+
+  # DeepLOB 檢查點（預設路徑，可被命令行參數覆蓋）
+  deeplob_checkpoint: "checkpoints/v5/deeplob_v5_best.pth"
+
+  # Episode 配置
+  max_steps: 500
+  initial_balance: 10000.0
+
+  # 交易參數
+  transaction_cost_rate: 0.001  # 0.1% 交易成本
+  max_position: 1               # 最大持倉 {-1, 0, 1}
+
+  # 獎勵塑形
+  reward_config:
+    pnl_scale: 1.0              # PnL 權重
+    cost_penalty: 1.0           # 交易成本懲罰
+    inventory_penalty: 0.01     # 庫存懲罰
+    risk_penalty: 0.005         # 風險懲罰
+
+  # 數據模式
+  data_mode: "train"            # train/val/test
+
+# ===== PPO 超參數 =====
+ppo:
+  # 學習率
+  learning_rate: 0.0003         # 3e-4 (PPO 預設)
+
+  # 折扣因子
+  gamma: 0.99                   # 長期收益權重
+  gae_lambda: 0.95              # GAE 優勢估計
+
+  # PPO 特有參數
+  clip_range: 0.2               # PPO clip 參數
+  ent_coef: 0.01                # Entropy 係數（探索）
+  vf_coef: 0.5                  # Value function 係數
+  max_grad_norm: 0.5            # 梯度裁剪
+
+  # 訓練配置
+  n_steps: 2048                 # Rollout buffer size (每次收集步數)
+  batch_size: 64                # Mini-batch size
+  n_epochs: 10                  # 每次更新的 epoch 數
+
+  # 網絡架構
+  net_arch:
+    pi: [256, 128]              # Actor 網絡 (策略)
+    vf: [256, 128]              # Critic 網絡 (價值函數)
+
+  # 激活函數
+  activation_fn: "ReLU"         # ReLU / Tanh
+
+  # 其他
+  verbose: 1                    # 日誌詳細程度 (0/1/2)
+  seed: 42                      # 隨機種子
+
+# ===== DeepLOB 特徵提取器配置 =====
+deeplob_extractor:
+  # 是否使用 DeepLOB 特徵提取器
+  use_deeplob: true
+
+  # 特徵維度
+  features_dim: 128             # 提取器輸出維度
+
+  # 是否使用 LSTM 隱藏層特徵
+  use_lstm_hidden: false        # false=使用預測概率, true=使用LSTM hidden
+
+  # 是否凍結 DeepLOB 權重
+  freeze_deeplob: true          # 凍結 DeepLOB（不訓練）
+
+  # MLP 提取器網絡架構
+  extractor_net_arch: [256, 128]
+
+# ===== 訓練配置 =====
+training:
+  # 訓練步數
+  total_timesteps: 1000000      # 1M steps (推薦)
+
+  # 日誌配置
+  log_interval: 10              # 每 N 次更新記錄一次
+  tensorboard_log: "logs/sb3_deeplob"
+
+  # 檢查點配置
+  checkpoint_dir: "checkpoints/sb3/ppo_deeplob"
+  final_model_name: "ppo_deeplob_final"
+
+  # 進度條
+  progress_bar: true
+
+# ===== 設備配置 =====
+device:
+  # 預設設備（可被命令行參數覆蓋）
+  default: "cuda"               # cuda / cpu
+
+  # 自動回退到 CPU
+  auto_fallback: true           # CUDA 不可用時自動使用 CPU
+
+# ===== 向量化環境配置 =====
+vec_env:
+  # 預設環境數量（可被命令行參數覆蓋）
+  n_envs: 1                     # 並行環境數（1=不並行）
+
+  # 向量化類型（可被命令行參數覆蓋）
+  vec_type: "dummy"             # dummy / subproc
+
+# ===== 評估配置 =====
+evaluation:
+  # 評估頻率
+  eval_freq: 10000              # 每 10K steps 評估一次
+  n_eval_episodes: 10           # 評估 episode 數
+
+  # 評估環境配置（使用驗證集）
+  eval_env_config:
+    data_mode: "val"
+    max_steps: 500
+
+  # 最佳模型選擇
+  deterministic: true           # 評估時使用確定性策略
+  render: false                 # 是否渲染
+
+# ===== 回調配置 =====
+callbacks:
+  # Checkpoint Callback
+  checkpoint:
+    enabled: true
+    save_freq: 50000            # 每 50K steps 保存一次
+    save_path: "checkpoints/sb3/ppo_deeplob"
+    name_prefix: "ppo_model"
+    save_replay_buffer: false
+    save_vecnormalize: false
+
+  # Eval Callback
+  eval:
+    enabled: true
+    eval_freq: 10000            # 每 10K steps 評估一次
+    n_eval_episodes: 10
+    best_model_save_path: "checkpoints/sb3/ppo_deeplob"
+    log_path: "logs/sb3_eval"
+    deterministic: true
+
+  # TensorBoard
+  tensorboard:
+    enabled: true
+    log_dir: "logs/sb3_deeplob"
+
+# ===== 測試模式配置 =====
+test_mode:
+  # 快速測試配置（用於驗證流程）
+  enabled: false                # 由命令行 --test 參數控制
+
+  total_timesteps: 10000        # 10K steps
+  save_freq: 5000
+  eval_freq: 5000
+  n_eval_episodes: 3
+  n_steps: 512
+  batch_size: 32
+
+# ===== 驗證配置 =====
+validation:
+  # DeepLOB 檢查點驗證
+  verify_checkpoint: true       # 是否驗證檢查點存在
+
+  # 日誌級別
+  log_level: "INFO"             # DEBUG / INFO / WARNING / ERROR
+
+# ===== 輸出配置 =====
+output:
+  # 訓練完成後的提示信息
+  show_next_steps: true
+
+  # 保存路徑
+  final_model_path: "checkpoints/sb3/ppo_deeplob/ppo_deeplob_final"
+  best_model_path: "checkpoints/sb3/ppo_deeplob/best_model"
+
+# ===== 高級配置 =====
+advanced:
+  # 混合精度訓練（需要 GPU）
+  use_mixed_precision: false    # 實驗性功能
+
+  # 梯度累積
+  gradient_accumulation_steps: 1
+
+  # 學習率調度
+  lr_schedule: "constant"       # constant / linear / exponential
+
+  # 提前停止
+  early_stopping:
+    enabled: false
+    patience: 10
+    min_delta: 0.01
+
+# ===== 註釋說明 =====
+#
+# 使用範例：
+#
+# 1. 完整訓練（1M steps）：
+#    python scripts/train_sb3_deeplob.py --config configs/sb3_deeplob_config.yaml
+#
+# 2. 快速測試（10K steps）：
+#    python scripts/train_sb3_deeplob.py --config configs/sb3_deeplob_config.yaml --test
+#
+# 3. 指定 DeepLOB 檢查點：
+#    python scripts/train_sb3_deeplob.py \
+#        --config configs/sb3_deeplob_config.yaml \
+#        --deeplob-checkpoint checkpoints/v5/deeplob_v5_best.pth
+#
+# 4. 高性能訓練（大 batch + 並行環境）：
+#    python scripts/train_sb3_deeplob.py \
+#        --config configs/sb3_deeplob_config.yaml \
+#        --n-envs 4 \
+#        --device cuda
+#
+# 5. 監控訓練：
+#    tensorboard --logdir logs/sb3_deeplob/
+#
+# 關鍵參數調整建議：
+#
+# 1. 學習率 (learning_rate):
+#    - 預設: 3e-4
+#    - 建議範圍: 1e-4 ~ 1e-3
+#    - 調整: 訓練不穩定時降低，收斂太慢時提高
+#
+# 2. Gamma (折扣因子):
+#    - 預設: 0.99
+#    - 建議範圍: 0.95 ~ 0.995
+#    - 調整: 高頻交易可降低（更重視短期收益）
+#
+# 3. Entropy 係數 (ent_coef):
+#    - 預設: 0.01
+#    - 建議範圍: 0.001 ~ 0.05
+#    - 調整: 探索不足時提高，過度探索時降低
+#
+# 4. N Steps (rollout buffer):
+#    - 預設: 2048
+#    - 建議範圍: 1024 ~ 4096
+#    - 調整: 更大值更穩定但慢，更小值更快但不穩定
+#
+# 5. Batch Size:
+#    - 預設: 64
+#    - 建議範圍: 32 ~ 256
+#    - 調整: 根據 GPU 顯存調整，越大越穩定
+#
+# GPU 利用率優化：
+#    - 增加 batch_size (64 -> 128 -> 256)
+#    - 增加 n_envs (1 -> 4 -> 8)
+#    - 增加 n_steps (2048 -> 4096)
+#
+# RTX 5090 (32GB VRAM) 建議配置：
+#    - batch_size: 256
+#    - n_envs: 8
+#    - n_steps: 4096
+#    - 預期 GPU 利用率: 80-95%
