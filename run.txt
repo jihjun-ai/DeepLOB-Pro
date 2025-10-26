@@ -25,8 +25,7 @@ python scripts/analyze_label_distribution.py \
     --output results/dataset_selection_minimal.json
 
 
-
-
+由上方的json組合成訓練數據
 ### 產生訓練資料
 python scripts/extract_tw_stock_data_v7.py    --preprocessed-dir ./data/preprocessed_swing  --output-dir ./data/processed_v7 --config configs/config_pro_v7_optimal.yaml --json ./data/dataset_selection.json
 
@@ -36,6 +35,26 @@ python scripts\train_deeplob_v5.py --config configs\train_v5.yaml --data-dir dat
 
 python scripts\train_deeplob_v5.py --config configs\train_v5_experiment4_practical.yaml --data-dir data\processed_v7\npz
 python scripts\train_deeplob_v5.py --config configs\train_v5_experiment4.yaml --data-dir data\processed_v7\npz
+
+
+
+
+### 訓練
+deeplob + PPO
+
+python scripts/train_sb3_deeplob.py --test
+
+
+# 使用預設配置訓練 1M steps
+python scripts/train_sb3_deeplob.py
+
+# 自訂訓練步數
+python scripts/train_sb3_deeplob.py --timesteps 500000
+
+
+
+#分析數據
+python scripts/analyze_tensorboard.py --logdir logs/sb3_deeplob/PPO_5 --output results/analysis.json
 
 
 

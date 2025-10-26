@@ -1,4 +1,4 @@
-"""PPO + DeepLOB 完整訓練腳本 - 雙層學習架構
+"""PPO + DeepLOB 完整訓練腳本 - 雙層學習架構（支持續訓）
 
 此腳本實現完整的 DeepLOB + SB3 PPO 整合訓練：
     第一層: DeepLOB 提取 LOB 深層特徵（凍結權重）
@@ -9,6 +9,7 @@
     2. 創建帶 DeepLOB 特徵提取器的 PPO 模型
     3. 執行完整訓練（推薦 1M steps）
     4. 持續評估與保存最佳模型
+    5. 支持續訓功能（從檢查點繼續訓練）
 
 使用範例：
     # 完整訓練（1M steps，推薦，4-8 小時 RTX 5090）
@@ -27,12 +28,24 @@
     # 高性能訓練（大 batch size + 並行環境）
     python scripts/train_sb3_deeplob.py --n-envs 4 --device cuda
 
+    # 續訓模式（從檢查點繼續訓練，步數累加）
+    python scripts/train_sb3_deeplob.py \
+        --resume checkpoints/sb3/ppo_deeplob/ppo_model_500000_steps.zip
+
+    # 續訓模式（重置步數計數器）
+    python scripts/train_sb3_deeplob.py \
+        --resume checkpoints/sb3/ppo_deeplob/ppo_model_500000_steps.zip \
+        --reset-timesteps
+
+    # 使用 YAML 配置續訓（編輯 config.yaml 中的 training.resume 部分）
+    python scripts/train_sb3_deeplob.py --config configs/sb3_deeplob_config.yaml
+
     # 監控訓練
     tensorboard --logdir logs/sb3_deeplob/
 
 作者: SB3-DeepLOB 專案團隊
 日期: 2025-10-26
-版本: v2.0 (移除所有硬編碼，使用 YAMLManager)
+版本: v2.1 (新增續訓功能)
 """
 
 import sys
@@ -204,8 +217,20 @@ def create_callbacks(config: dict, eval_env):
         return None
 
 
-def create_ppo_deeplob_model(env, config: dict, deeplob_checkpoint: str, device: str = None):
-    """創建整合 DeepLOB 的 PPO 模型"""
+def create_ppo_deeplob_model(env, config: dict, deeplob_checkpoint: str, device: str = None, resume_checkpoint: str | None = None, reset_timesteps: bool = False):
+    """創建整合 DeepLOB 的 PPO 模型（支持續訓）
+
+    Args:
+        env: 訓練環境
+        config: 配置字典
+        deeplob_checkpoint: DeepLOB 檢查點路徑
+        device: 設備 (cuda/cpu)
+        resume_checkpoint: PPO 續訓檢查點路徑 (可選)
+        reset_timesteps: 是否重置時間步數計數器
+
+    Returns:
+        PPO 模型實例
+    """
     ppo_config = config.get('ppo', {})
     deeplob_config = config.get('deeplob_extractor', {})
 
@@ -213,7 +238,34 @@ def create_ppo_deeplob_model(env, config: dict, deeplob_checkpoint: str, device:
     if device is None:
         device = config.get('device', {}).get('default', 'cuda')
 
-    logger.info("🔨 構建 PPO + DeepLOB 模型")
+    # ===== 續訓模式 =====
+    if resume_checkpoint:
+        logger.info("🔄 續訓模式: 載入已訓練的 PPO 模型")
+        logger.info(f"  - 檢查點: {resume_checkpoint}")
+        logger.info(f"  - 重置步數: {reset_timesteps}")
+
+        try:
+            model = PPO.load(
+                resume_checkpoint,
+                env=env,
+                device=device,
+                reset_num_timesteps=reset_timesteps
+            )
+            logger.info("✅ PPO 模型載入成功")
+
+            # 顯示模型信息
+            logger.info(f"  - 當前步數: {model.num_timesteps:,}")
+            logger.info(f"  - Learning Rate: {model.learning_rate}")
+            logger.info(f"  - Device: {device}")
+
+            return model
+
+        except Exception as e:
+            logger.error(f"❌ 續訓模型載入失敗: {e}")
+            raise RuntimeError(f"無法載入續訓檢查點: {resume_checkpoint}")
+
+    # ===== 從頭訓練模式 =====
+    logger.info("🔨 構建新的 PPO + DeepLOB 模型")
 
     # 使用 DeepLOB 特徵提取器
     if deeplob_config.get('use_deeplob', True):
@@ -356,7 +408,7 @@ def show_next_steps(config: dict):
 
 
 def main():
-    parser = argparse.ArgumentParser(description='PPO + DeepLOB 完整訓練')
+    parser = argparse.ArgumentParser(description='PPO + DeepLOB 完整訓練（支持續訓）')
     parser.add_argument('--config', type=str, default='configs/sb3_deeplob_config.yaml',
                       help='配置文件路徑')
     parser.add_argument('--deeplob-checkpoint', type=str, default=None,
@@ -371,6 +423,12 @@ def main():
                       help='並行環境數量（覆蓋配置文件）')
     parser.add_argument('--vec-type', type=str, default=None,
                       help='向量化類型: dummy / subproc（覆蓋配置文件）')
+
+    # 續訓相關參數
+    parser.add_argument('--resume', type=str, default=None,
+                      help='續訓的 PPO 模型檢查點路徑（.zip 文件，覆蓋配置文件）')
+    parser.add_argument('--reset-timesteps', action='store_true',
+                      help='重置時間步數計數器（續訓時使用）')
 
     args = parser.parse_args()
 
@@ -439,13 +497,31 @@ def main():
         logger.info("\n🔔 設置訓練回調")
         callbacks = create_callbacks(config, eval_env)
 
-        # 9. 創建 PPO + DeepLOB 模型
+        # 9. 確定續訓設置
+        resume_config = config.get('training', {}).get('resume', {})
+        resume_checkpoint = args.resume  # 命令行優先
+        if resume_checkpoint is None and resume_config.get('enabled', False):
+            resume_checkpoint = resume_config.get('checkpoint_path')
+
+        reset_timesteps = args.reset_timesteps or resume_config.get('reset_timesteps', False)
+
+        # 驗證續訓檢查點
+        if resume_checkpoint:
+            if not os.path.exists(resume_checkpoint):
+                raise FileNotFoundError(f"續訓檢查點不存在: {resume_checkpoint}")
+            logger.info("\n🔄 啟用續訓模式")
+            logger.info(f"  - 檢查點: {resume_checkpoint}")
+            logger.info(f"  - 重置步數: {reset_timesteps}")
+
+        # 10. 創建 PPO + DeepLOB 模型
         logger.info("\n🤖 創建 PPO + DeepLOB 模型")
         model = create_ppo_deeplob_model(
             env,
             config,
             deeplob_checkpoint=deeplob_checkpoint,
-            device=device
+            device=device,
+            resume_checkpoint=resume_checkpoint,
+            reset_timesteps=reset_timesteps
         )
 
         # 10. 開始訓練

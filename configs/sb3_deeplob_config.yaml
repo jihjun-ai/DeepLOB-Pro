@@ -27,8 +27,39 @@ env_config:
   initial_balance: 10000.0
 
   # 交易參數
-  transaction_cost_rate: 0.001  # 0.1% 交易成本
   max_position: 1               # 最大持倉 {-1, 0, 1}
+
+  # ===== 台股交易成本配置 (2025 最新) =====
+  # 重要：台股報價為"每股價格"，交易單位為"張"（1 張 = 1000 股）
+  #       計算成本時：交易價值 = 報價 × 1000 × 持倉張數
+  transaction_cost:
+    # 台股交易單位
+    shares_per_lot: 1000        # 每張 = 1000 股（固定）
+
+    # 券商手續費（買賣雙邊收取，折扣相同）
+    commission:
+      base_rate: 0.001425       # 法定上限 0.1425%
+      discount: 0.3             # 折扣 (0.1-1.0)
+                                # 1.0 = 無折扣 (0.1425%)
+                                # 0.6 = 6折 (0.0855%) ← 電子券商
+                                # 0.3 = 3折 (0.04275%) ← 量化交易
+      min_fee: 20.0             # 單筆最低手續費（台幣）
+
+                                # 計算範例：
+                                # 報價 100 元/股，買 1 張
+                                # 交易價值 = 100 × 1000 = 100,000 元
+                                # 手續費 = 100,000 × 0.04275% = 42.75 元
+
+    # 證券交易稅（僅賣出收取）
+    securities_tax:
+      rate: 0.0015              # 稅率 0.15%（當沖減半後，延長至 2027/12/31）
+                                # 一般賣出: 0.003 (0.3%)
+                                # 當沖賣出: 0.0015 (0.15%) ← 推薦使用
+
+    # 滑點成本（可選）
+    slippage:
+      enabled: false            # 是否啟用
+      rate: 0.0001              # 滑點率 0.01%
 
   # 獎勵塑形
   reward_config:
@@ -43,16 +74,16 @@ env_config:
 # ===== PPO 超參數 =====
 ppo:
   # 學習率
-  learning_rate: 0.0003         # 3e-4 (PPO 預設)
+  learning_rate: 0.0001         # 1e-4 (降低) | PPO_5: 3e-4 (KL散度過高0.129，訓練不穩定)
 
   # 折扣因子
   gamma: 0.99                   # 長期收益權重
   gae_lambda: 0.95              # GAE 優勢估計
 
   # PPO 特有參數
-  clip_range: 0.2               # PPO clip 參數
+  clip_range: 0.1               # PPO clip 參數 (降低) | PPO_5: 0.2 (策略更新步長過大)
   ent_coef: 0.01                # Entropy 係數（探索）
-  vf_coef: 0.5                  # Value function 係數
+  vf_coef: 0.7                  # Value function 係數 (提高) | PPO_5: 0.5 (解釋方差-0.524，價值函數擬合不佳)
   max_grad_norm: 0.5            # 梯度裁剪
 
   # 訓練配置
@@ -62,8 +93,8 @@ ppo:
 
   # 網絡架構
   net_arch:
-    pi: [256, 128]              # Actor 網絡 (策略)
-    vf: [256, 128]              # Critic 網絡 (價值函數)
+    pi: [512, 256]              # Actor 網絡 (策略) | PPO_5: [256,128] (解釋方差低，需增加容量)
+    vf: [512, 256]              # Critic 網絡 (價值函數) | PPO_5: [256,128] (解釋方差-0.524，擬合不佳)
 
   # 激活函數
   activation_fn: "ReLU"         # ReLU / Tanh
@@ -87,12 +118,21 @@ deeplob_extractor:
   freeze_deeplob: true          # 凍結 DeepLOB（不訓練）
 
   # MLP 提取器網絡架構
-  extractor_net_arch: [256, 128]
+  extractor_net_arch: [512, 256] # PPO_5: [256,128] (配合 net_arch 增加容量)
 
 # ===== 訓練配置 =====
 training:
   # 訓練步數
-  total_timesteps: 1000000      # 1M steps (推薦)
+  total_timesteps: 200000       # 200K steps (調參階段) | PPO_5: 500K (調參OK後再增加至1M)
+
+  # 續訓配置
+  resume:
+    enabled: false              # 是否啟用續訓模式
+    checkpoint_path: null       # 續訓的 PPO 模型路徑（.zip 文件）
+                                # 範例: "checkpoints/sb3/ppo_deeplob/ppo_model_500000_steps.zip"
+    reset_timesteps: false      # 是否重置時間步數計數器
+                                # false: 繼續累加步數（推薦）
+                                # true: 從 0 開始重新計數
 
   # 日誌配置
   log_interval: 10              # 每 N 次更新記錄一次
@@ -228,7 +268,20 @@ advanced:
 #        --n-envs 4 \
 #        --device cuda
 #
-# 5. 監控訓練：
+# 5. 續訓模式（命令行指定）：
+#    python scripts/train_sb3_deeplob.py \
+#        --config configs/sb3_deeplob_config.yaml \
+#        --resume checkpoints/sb3/ppo_deeplob/ppo_model_500000_steps.zip
+#
+# 6. 續訓模式（YAML 配置，修改 training.resume 部分）：
+#    training:
+#      resume:
+#        enabled: true
+#        checkpoint_path: "checkpoints/sb3/ppo_deeplob/ppo_model_500000_steps.zip"
+#        reset_timesteps: false
+#    然後運行: python scripts/train_sb3_deeplob.py --config configs/sb3_deeplob_config.yaml
+#
+# 7. 監控訓練：
 #    tensorboard --logdir logs/sb3_deeplob/
 #
 # 關鍵參數調整建議：
