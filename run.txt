@@ -139,6 +139,9 @@ python scripts/train_deeplob_generic.py --config configs/deeplob_generic_config.
 ## 分析deeplob 數據
 python scripts\monitor_deeplob.py --log-dir logs/deeplob_v5_fixed
 
+### 來驗證模型是否開始交易。
+scripts/check_trading_behavior.py 
+
 
 
 

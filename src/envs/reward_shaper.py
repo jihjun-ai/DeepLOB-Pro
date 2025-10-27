@@ -203,6 +203,11 @@ class RewardShaper:
         # risk_penalty = self._calculate_risk_penalty(new_state)
         reward_components['risk_penalty'] = 0.0  # 不再懲罰風險
 
+        # ===== 組件5: 持倉激勵 ===== (已移除，PPO_12)
+        # 移除原因: PPO_11 證明持倉激勵導致「永遠持倉」問題
+        #           改用「當日收盤未平倉懲罰」策略（在環境中實施）
+        reward_components['holding_bonus'] = 0.0
+
         # ===== 計算總獎勵 =====
         # 將所有組件相加（注意懲罰項已經是負值）
         total_reward = sum(reward_components.values())

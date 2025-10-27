@@ -692,10 +692,30 @@ class TensorBoardAnalyzer:
 
         return recommendations
 
+    def _convert_to_json_serializable(self, obj):
+        """遞歸轉換 NumPy 類型為 Python 原生類型"""
+        if isinstance(obj, dict):
+            return {k: self._convert_to_json_serializable(v) for k, v in obj.items()}
+        elif isinstance(obj, list):
+            return [self._convert_to_json_serializable(item) for item in obj]
+        elif isinstance(obj, np.bool_):
+            return bool(obj)
+        elif isinstance(obj, (np.integer, np.int64, np.int32)):
+            return int(obj)
+        elif isinstance(obj, (np.floating, np.float64, np.float32)):
+            return float(obj)
+        elif isinstance(obj, np.ndarray):
+            return obj.tolist()
+        else:
+            return obj
+
     def save_json(self, output_path: str):
         """保存 JSON 報告"""
+        # 轉換所有 NumPy 類型為 Python 原生類型
+        serializable_summary = self._convert_to_json_serializable(self.summary)
+
         with open(output_path, 'w', encoding='utf-8') as f:
-            json.dump(self.summary, f, indent=2, ensure_ascii=False)
+            json.dump(serializable_summary, f, indent=2, ensure_ascii=False)
 
         print(f"[OK] JSON 報告已保存: {output_path}")
 

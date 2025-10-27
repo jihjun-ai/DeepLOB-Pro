@@ -62,29 +62,31 @@ env_config:
       enabled: false            # 是否啟用
       rate: 0.0001              # 滑點率 0.01%
 
-  # 獎勵塑形 (PPO_6 簡化版)
+  # 獎勵塑形 (PPO_20 版本: 回到 PPO_16 基礎 + 延長至 3M 步)
   reward_config:
     pnl_scale: 1.0              # PnL 權重（核心獎勵）
     cost_penalty: 1.0           # 交易成本懲罰
     inventory_penalty: 0.0      # ❌ 已移除 | PPO_6: 不懲罰長時間持倉
     risk_penalty: 0.0           # ❌ 已移除 | PPO_6: 簡化獎勵函數
+    # 注意: unclosed_position_penalty 在 tw_lob_trading_env.py 中實施 (Line 380)
+    #       PPO_20: -3元/倉位 (回到 PPO_16 成功配置，延長至3M+LR衰減) | PPO_19: -2.5元/倉位 (Buy 0%❌，完全不交易) | PPO_18: -3元/倉位 (Buy 3.4%, 20%勝率, 平均-0.51) | PPO_16: -3元/倉位 (✅ Buy 7.3%, 40%勝率，+1.18最佳獎勵) | PPO_15: -5元/倉位 (Buy 4.4%) | PPO_14: -2元/倉位 (Buy 77.8%)
 
   # 數據模式
   data_mode: "train"            # train/val/test
 
 # ===== PPO 超參數 =====
 ppo:
-  # 學習率
-  learning_rate: 0.0001         # 1e-4 (降低) | PPO_5: 3e-4 (KL散度過高0.129，訓練不穩定)
+  # 學習率（PPO_20: 線性衰減 1e-4 → 3e-5）
+  learning_rate: 0.0001         # 1e-4 | PPO_20: 1e-4 起始（配合 linear 衰減至 3e-5） | PPO_19: 1e-4 (Buy 0%❌) | PPO_18: 1e-4 (KL=0.0098穩定) | PPO_11: 1e-4 (✅ KL=0.0076穩定) | PPO_9: 1e-4 | PPO_5: 3e-4 (KL散度過高0.129)
 
   # 折扣因子
   gamma: 0.99                   # 長期收益權重
   gae_lambda: 0.95              # GAE 優勢估計
 
   # PPO 特有參數
-  clip_range: 0.1               # PPO clip 參數 (降低) | PPO_5: 0.2 (策略更新步長過大)
+  clip_range: 0.1               # PPO clip 參數 | PPO_15: 0.1 | PPO_11: 0.1 (✅ KL=0.0076) | PPO_9: 0.1 (✅ KL=0.014) | PPO_8: 0.1 (✅ KL=0.018)
   ent_coef: 0.01                # Entropy 係數（探索）
-  vf_coef: 0.7                  # Value function 係數 (提高) | PPO_5: 0.5 (解釋方差-0.524，價值函數擬合不佳)
+  vf_coef: 1.5                  # Value function 係數 | PPO_15: 1.5 (修復解釋方差) | PPO_14: 1.0 (解釋方差崩潰0.064) | PPO_11: 1.0 (✅ 0.827)
   max_grad_norm: 0.5            # 梯度裁剪
 
   # 訓練配置
@@ -94,8 +96,8 @@ ppo:
 
   # 網絡架構
   net_arch:
-    pi: [512, 256]              # Actor 網絡 (策略) | PPO_5: [256,128] (解釋方差低，需增加容量)
-    vf: [512, 256]              # Critic 網絡 (價值函數) | PPO_5: [256,128] (解釋方差-0.524，擬合不佳)
+    pi: [512, 256]              # Actor 網絡 (策略) | PPO_11: [512,256] | PPO_9: [512,256] | PPO_5: [256,128]
+    vf: [512, 256]              # Critic 網絡 (價值函數) | PPO_11: [512,256] | PPO_9: [512,256] | PPO_5: [256,128]
 
   # 激活函數
   activation_fn: "ReLU"         # ReLU / Tanh
@@ -123,8 +125,8 @@ deeplob_extractor:
 
 # ===== 訓練配置 =====
 training:
-  # 訓練步數
-  total_timesteps: 200000       # 200K steps (調參階段) | PPO_5: 500K (調參OK後再增加至1M)
+  # 訓練步數（PPO_20: 回到 PPO_16 成功配置，延長至 3M）
+  total_timesteps: 3000000      # 3M steps | PPO_20: 3M（回到-3元懲罰，延長訓練+LR衰減，預期 Buy 10-15%） | PPO_19: 1.5M (Buy 0%❌，完全不交易) | PPO_18: 1M (平均-0.51接近盈虧平衡) | PPO_16: 200K (✅ Buy 7.3%, 40%勝率，+1.18最佳獎勵) | PPO_15: 200K (Buy 4.4%) | PPO_14: 200K (Buy 77.8%)
 
   # 續訓配置
   resume:
@@ -239,8 +241,8 @@ advanced:
   # 梯度累積
   gradient_accumulation_steps: 1
 
-  # 學習率調度
-  lr_schedule: "constant"       # constant / linear / exponential
+  # 學習率調度（PPO_20: 啟用線性衰減）
+  lr_schedule: "linear"         # linear: 1e-4 → 3e-5 (PPO_20 啟用) | constant: 固定 1e-4 (PPO_19) | exponential: 指數衰減
 
   # 提前停止
   early_stopping:
