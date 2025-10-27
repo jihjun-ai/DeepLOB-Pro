@@ -4,14 +4,16 @@
   1. LOB 維度: 20維（5檔）而非 40維（10檔）
   2. 數據來源: stock_embedding_*.npz 而非 FI-2010
   3. 觀測空間: 28維（LOB 20 + DeepLOB 3 + 狀態 5）
+  4. 策略模式: Long Only（只做多，不做空）
 
 環境規格:
     觀測空間: (28,) = LOB(20) + DeepLOB預測(3) + 交易狀態(5)
-    動作空間: Discrete(3) - {Hold, Buy, Sell}
+    動作空間: Discrete(2) - {0: Hold/Sell, 1: Buy} (Long Only)
+    持倉範圍: [0, max_position] (不允許負倉位)
     獎勵: PnL - 交易成本 - 庫存懲罰 - 風險懲罰
 
 作者: RLlib-DeepLOB 專案團隊
-更新: 2025-10-12
+更新: 2025-10-26 (改為 Long Only 策略)
 """
 
 import numpy as np
@@ -74,8 +76,9 @@ class TaiwanLOBTradingEnv(gym.Env):
             dtype=np.float32
         )
 
-        # 動作空間: {0: Hold, 1: Buy, 2: Sell}
-        self.action_space = spaces.Discrete(3)
+        # 動作空間: {0: Hold/Sell, 1: Buy} - Long Only 策略
+        # PPO_6: 改為只做多 (2025-10-26)
+        self.action_space = spaces.Discrete(2)
 
         # 載入 DeepLOB 模型
         self.deeplob_model = None
@@ -286,35 +289,52 @@ class TaiwanLOBTradingEnv(gym.Env):
             'prev_price': current_price  # ⭐ 新增：當前價格作為下一步的 prev_price
         }
 
-        # 執行交易
+        # 執行交易 (Long Only 策略)
         transaction_cost = 0.0
+        position_changed = False
 
-        if action != prev_position + 1:
-            position_change = abs(action - (prev_position + 1))
-            transaction_cost = position_change * current_price * self.transaction_cost_rate
-            self.total_cost += transaction_cost
+        if action == 1:  # Buy - 買入或加倉
+            if self.position < self.max_position:
+                # 計算交易成本
+                transaction_cost = current_price * self.transaction_cost_rate
+                self.total_cost += transaction_cost
 
-            # 更新倉位
-            if action == 0:  # Sell
-                new_position = self.position - 1
-                self.position = max(-self.max_position, new_position)
-            elif action == 2:  # Buy
-                new_position = self.position + 1
-                self.position = min(self.max_position, new_position)
+                # 更新倉位
+                old_position = self.position
+                self.position = min(self.max_position, self.position + 1)
+                position_changed = (self.position != old_position)
 
-            # 記錄交易
-            if self.position != prev_position:
-                self.trade_history.append({
-                    'step': self.current_step,
-                    'action': action,
-                    'price': current_price,
-                    'position': self.position,
-                    'cost': transaction_cost
-                })
+                # 更新進場價（加權平均）
+                if old_position == 0:
+                    # 從空倉買入
+                    self.entry_price = current_price
+                elif position_changed:
+                    # 加倉，更新平均成本
+                    total_cost = old_position * self.entry_price + current_price
+                    self.entry_price = total_cost / self.position
 
-            # 更新進場價
-            if prev_position == 0 and self.position != 0:
-                self.entry_price = current_price
+        elif action == 0:  # Hold/Sell - 持有或平倉
+            if self.position > 0:
+                # 選擇性平倉（減倉或全平）
+                # 為了簡化，這裡實作為全平倉
+                transaction_cost = current_price * self.transaction_cost_rate
+                self.total_cost += transaction_cost
+
+                # 平倉
+                old_position = self.position
+                self.position = 0
+                position_changed = (old_position > 0)
+
+        # 記錄交易
+        if position_changed:
+            self.trade_history.append({
+                'step': self.current_step,
+                'action': action,
+                'price': current_price,
+                'position': self.position,
+                'prev_position': prev_position,
+                'cost': transaction_cost
+            })
 
         # 更新庫存
         if self.position != 0:

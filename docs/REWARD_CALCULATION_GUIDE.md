@@ -1,9 +1,10 @@
-# 獎懲計算方式說明
+# 獎懲計算方式說明 (Long Only 版本)
 
 ## 文件信息
 
 - **建立日期**: 2025-10-26
-- **版本**: v1.0
+- **版本**: v2.0 (Long Only 策略)
+- **更新日期**: 2025-10-26 (改為只做多)
 - **核心模組**: `src/envs/reward_shaper.py`
 - **環境模組**: `src/envs/tw_lob_trading_env.py`
 
@@ -16,6 +17,20 @@
 ```
 總獎勵 = PnL獎勵 - 交易成本懲罰 - 庫存懲罰 - 風險懲罰
 ```
+
+### ⭐ Long Only 策略說明 (v2.0 更新)
+
+**動作空間**:
+- `action=0`: Hold/Sell（持有或平倉）
+- `action=1`: Buy（買入）
+
+**倉位範圍**: `[0, max_position]`（不允許負倉位，即不做空）
+
+**優勢**:
+- 符合台股現貨市場特性（一般散戶無法做空）
+- 簡化策略空間，加速訓練
+- 降低風險（避免做空風險無限）
+- 更符合實際交易場景
 
 ### 設計原則
 
@@ -38,7 +53,7 @@
 
 ---
 
-## 二、四大獎勵組件詳解
+## 二、獎勵組件詳解 (PPO_6 簡化版: 2組件)
 
 ### 組件1: PnL獎勵（盈虧）⭐⭐⭐⭐⭐
 
@@ -59,22 +74,24 @@ if prev_position != 0 and new_position == 0:  # 平倉
     realized_pnl = prev_position × (平倉價 - 進場價)
 ```
 
-**範例**:
+**範例 (Long Only)**:
 ```
 做多盈利:
   進場: position=+1, entry_price=100
   平倉: position=0, exit_price=103
-  realized_pnl = +1 × (103 - 100) = +3.0 ✅
-
-做空盈利:
-  進場: position=-1, entry_price=100
-  平倉: position=0, exit_price=97
-  realized_pnl = -1 × (97 - 100) = +3.0 ✅
+  realized_pnl = +1 × (103 - 100) = +3.0 ✅ 盈利
 
 做多虧損:
   進場: position=+1, entry_price=100
   平倉: position=0, exit_price=98
-  realized_pnl = +1 × (98 - 100) = -2.0 ❌
+  realized_pnl = +1 × (98 - 100) = -2.0 ❌ 虧損
+
+做多持平:
+  進場: position=+1, entry_price=100
+  平倉: position=0, exit_price=100
+  realized_pnl = +1 × (100 - 100) = 0.0 ➖ 持平
+
+注意: Long Only 策略中，position 永遠 >= 0（不做空）
 ```
 
 #### 1.2 增量未實現盈虧（Incremental Unrealized PnL）
@@ -214,101 +231,66 @@ cost_penalty: 0.5
 
 ---
 
-### 組件3: 庫存懲罰 ⭐⭐⭐
+### ~~組件3: 庫存懲罰~~ ❌ 已移除（PPO_6）
 
-**目的**: 懲罰長時間持倉，鼓勵快速平倉
+**移除原因**:
 
-**計算公式**:
-```
-庫存懲罰 = -|inventory| × inventory_penalty_weight
-```
+1. **避免重複懲罰**
+   - 虧損時賣出，PnL 已經反映虧損（負獎勵）
+   - 再加上庫存懲罰會導致雙重懲罰
+   - 不符合實際交易邏輯
 
-**inventory 定義**:
+2. **讓策略自由決定持倉時間**
+   - 移除人為設計的懲罰項
+   - 讓模型從數據學習最優持倉時間
+   - 有些機會需要長時間持倉才能獲利
+
+3. **簡化獎勵函數**
+   - 減少調參複雜度
+   - 更直觀的獎勵信號
+
+**舊版計算方式**（僅供參考）:
 ```python
-if position != 0:
-    inventory = position × (current_price - entry_price)
-else:
-    inventory = 0.0
+# ❌ 已移除
+# if position != 0:
+#     inventory = position × (current_price - entry_price)
+#     inventory_penalty = -|inventory| × inventory_penalty_weight
+# else:
+#     inventory_penalty = 0.0
 ```
 
-**設計理念**:
-- 使用絕對值，無論做多做空都受懲罰
-- 持倉時間越長，inventory 數值越大
-- 鼓勵智能體快速進出，降低市場暴露
-
-**範例**:
-```
-做多持倉（entry_price=100）:
-  Step 1: price=101, inventory = +1 × (101-100) = 1.0
-    懲罰 = -1.0 × 0.01 = -0.01
-
-  Step 2: price=102, inventory = +1 × (102-100) = 2.0
-    懲罰 = -2.0 × 0.01 = -0.02
-
-  Step 3: price=103, inventory = +1 × (103-100) = 3.0
-    懲罰 = -3.0 × 0.01 = -0.03
-
-平倉: inventory = 0, 懲罰 = 0
-```
-
-**權重配置**:
+**PPO_6 新配置**:
 ```yaml
-# 極快進出（高懲罰）
-inventory_penalty: 0.05
-
-# 平衡（預設）
-inventory_penalty: 0.01
-
-# 允許持倉（低懲罰）
-inventory_penalty: 0.001
+inventory_penalty: 0.0  # 不再懲罰庫存
 ```
 
 ---
 
-### 組件4: 風險懲罰 ⭐⭐
+### ~~組件4: 風險懲罰~~ ❌ 已移除（PPO_6）
 
-**目的**: 基於波動率的風險管理，高波動時持倉受更大懲罰
+**移除原因**:
 
-**計算公式**:
-```
-風險懲罰 = -|position| × volatility × risk_penalty_weight
-```
+1. **簡化獎勵函數**
+   - 移除人為設計的複雜懲罰項
+   - 讓 PnL 主導學習方向
 
-**volatility 定義**:
-- 市場波動率（價格變動的標準差）
-- 通常使用滾動窗口計算（如20期）
-- 高波動 > 0.02，低波動 < 0.01
+2. **PnL 已包含風險**
+   - 高波動時持倉，價格下跌會導致虧損（負 PnL）
+   - 不需要額外懲罰風險
 
-**設計理念**:
-- 波動率高時持倉風險大
-- 平倉狀態（position=0）無風險懲罰
-- 鼓勵在低波動時持倉，高波動時平倉
+3. **減少調參複雜度**
+   - 少一個超參數
+   - 更容易找到最優配置
 
-**範例**:
-```
-高波動時持倉:
-  position=1, volatility=0.03
-  風險懲罰 = -1 × 0.03 × 0.005 = -0.00015
-
-低波動時持倉:
-  position=1, volatility=0.01
-  風險懲罰 = -1 × 0.01 × 0.005 = -0.00005
-
-平倉狀態:
-  position=0, volatility=0.03
-  風險懲罰 = 0  # 無懲罰
+**舊版計算方式**（僅供參考）:
+```python
+# ❌ 已移除
+# risk_penalty = -|position| × volatility × risk_penalty_weight
 ```
 
-**權重配置**:
+**PPO_6 新配置**:
 ```yaml
-# 極度保守（高懲罰）
-risk_penalty: 0.02
-
-# 平衡（預設）
-risk_penalty: 0.005
-
-# 激進（低懲罰）
-risk_penalty: 0.001
+risk_penalty: 0.0  # 不再懲罰風險
 ```
 
 ---

@@ -1,19 +1,19 @@
-"""獎勵塑形模組 - LOB 交易環境的多組件獎勵函數
+"""獎勵塑形模組 - LOB 交易環境的多組件獎勵函數 (Long Only 簡化版)
 
-此模組實作了複雜的多組件獎勵函數，用於引導強化學習智能體學習有效的交易策略。
+此模組實作了簡化的多組件獎勵函數，用於引導強化學習智能體學習有效的交易策略。
 獎勵函數設計是強化學習中最關鍵的部分，直接影響智能體的學習效果。
 
-獎勵組件:
-    1. PnL (盈虧): 基礎獎勵，衡量交易獲利能力
-    2. 交易成本: 懲罰頻繁交易，考慮手續費和滑點
-    3. 庫存懲罰: 避免長時間持倉，降低市場風險
-    4. 風險懲罰: 基於波動率的風險管理
+獎勵組件 (PPO_6 簡化版):
+    1. PnL (盈虧): 核心獎勵，衡量交易獲利能力 ⭐⭐⭐⭐⭐
+    2. 交易成本: 懲罰頻繁交易，考慮手續費和滑點 ⭐⭐
+    3. 庫存懲罰: ❌ 已移除 (讓策略自由決定持倉時間)
+    4. 風險懲罰: ❌ 已移除 (簡化獎勵函數)
 
 設計原則:
-    - 平衡短期盈利與長期穩定性
-    - 考慮實際交易成本
-    - 鼓勵風險管理
-    - 避免過度交易
+    - 以 PnL 為核心，直接優化盈利能力
+    - 考慮實際交易成本，避免過度交易
+    - 移除人為懲罰項，讓數據驅動策略學習
+    - 簡化獎勵函數，加速訓練收斂
 
 使用範例:
     >>> config = {
@@ -50,17 +50,14 @@ class RewardShaper:
         - 鼓勵快速平倉，避免長時間暴露
         - 使用可調整的權重平衡各個目標
 
-    獎勵公式:
-        總獎勵 = PnL × pnl_scale
-                - 交易成本 × cost_penalty_weight
-                - |庫存| × inventory_penalty_weight
-                - |倉位| × 波動率 × risk_penalty_weight
+    獎勵公式 (PPO_6 簡化版):
+        總獎勵 = PnL × pnl_scale - 交易成本 × cost_penalty_weight
 
     參數調整指南:
-        - pnl_scale: 越大越激進（追求高收益）
-        - cost_penalty: 越大越減少交易頻率
-        - inventory_penalty: 越大越傾向快速平倉
-        - risk_penalty: 越大越保守（規避風險）
+        - pnl_scale: 越大越注重盈利（建議 1.0-2.0）
+        - cost_penalty: 越大越減少交易頻率（建議 1.0-2.0）
+        - inventory_penalty: ❌ 已移除
+        - risk_penalty: ❌ 已移除
     """
 
     def __init__(self, config: Dict):
@@ -78,39 +75,31 @@ class RewardShaper:
                     - 數值越大，越傾向減少交易
                     - 建議範圍: [0.5, 2.0]
 
-                inventory_penalty (float): 庫存懲罰權重，預設 0.01
-                    - 懲罰長時間持倉
-                    - 數值越大，越傾向快速平倉
-                    - 建議範圍: [0.001, 0.1]
+                inventory_penalty (float): ❌ 已移除（PPO_6）
+                    - 原因: 不需要懲罰長時間持倉
+                    - 讓策略自由決定持倉時間
 
-                risk_penalty (float): 風險懲罰權重，預設 0.005
-                    - 基於波動率的風險懲罰
-                    - 數值越大，越保守（避免高波動時持倉）
-                    - 建議範圍: [0.001, 0.05]
+                risk_penalty (float): ❌ 已移除（PPO_6）
+                    - 原因: 簡化獎勵函數
+                    - PnL 已包含風險考量
 
-        配置範例:
+        配置範例 (PPO_6 簡化版):
             # 激進策略（追求高收益）
             config = {
                 'pnl_scale': 2.0,
-                'cost_penalty': 0.5,
-                'inventory_penalty': 0.001,
-                'risk_penalty': 0.001
+                'cost_penalty': 0.5
             }
 
-            # 保守策略（注重風險管理）
+            # 保守策略（減少交易）
             config = {
                 'pnl_scale': 1.0,
-                'cost_penalty': 2.0,
-                'inventory_penalty': 0.05,
-                'risk_penalty': 0.02
+                'cost_penalty': 2.0
             }
 
-            # 平衡策略（預設值）
+            # 平衡策略（預設值，推薦）
             config = {
                 'pnl_scale': 1.0,
-                'cost_penalty': 1.0,
-                'inventory_penalty': 0.01,
-                'risk_penalty': 0.005
+                'cost_penalty': 1.0
             }
         """
         # ===== 獎勵組件權重 =====
@@ -200,18 +189,19 @@ class RewardShaper:
         cost_penalty = -transaction_cost * self.cost_penalty_weight
         reward_components['transaction_cost'] = cost_penalty
 
-        # ===== 組件3: 庫存懲罰 =====
-        # 懲罰長時間持倉，鼓勵快速平倉
-        # 使用絕對值，無論做多做空都受懲罰
-        inventory = new_state.get('inventory', 0.0)
-        inventory_penalty = -abs(inventory) * self.inventory_penalty_weight
-        reward_components['inventory_penalty'] = inventory_penalty
+        # ===== 組件3: 庫存懲罰 ===== (已移除，PPO_6)
+        # 移除原因:
+        #   1. 不需要懲罰長時間持倉，讓策略自由決定
+        #   2. 虧損時賣出不應額外懲罰
+        #   3. 獲利/虧損已在 PnL 中反映
+        # inventory = new_state.get('inventory', 0.0)
+        # inventory_penalty = -abs(inventory) * self.inventory_penalty_weight
+        reward_components['inventory_penalty'] = 0.0  # 不再懲罰庫存
 
-        # ===== 組件4: 風險懲罰 =====
-        # 基於波動率和倉位的風險懲罰
-        # 波動率高時持倉會受到更大懲罰
-        risk_penalty = self._calculate_risk_penalty(new_state)
-        reward_components['risk_penalty'] = risk_penalty
+        # ===== 組件4: 風險懲罰 ===== (已移除，PPO_6)
+        # 移除原因: 簡化獎勵函數，讓 PnL 主導學習
+        # risk_penalty = self._calculate_risk_penalty(new_state)
+        reward_components['risk_penalty'] = 0.0  # 不再懲罰風險
 
         # ===== 計算總獎勵 =====
         # 將所有組件相加（注意懲罰項已經是負值）
@@ -220,20 +210,20 @@ class RewardShaper:
         return total_reward, reward_components
 
     def _calculate_pnl(self, prev_state: Dict, new_state: Dict) -> float:
-        """計算盈虧 (Profit and Loss) - 修復版（增量獎勵）
+        """計算盈虧 (Profit and Loss) - Long Only 版本
 
-        ⭐ 修正內容（2025-10-13）:
+        ⭐ 修正內容（2025-10-26）:
+            - 適配 Long Only 策略（只做多，position 範圍 [0, max_position]）
             - 未實現盈虧改為計算增量（當前步的價格變化）
             - 避免獎勵隨時間二次方累積
-            - 修復了導致訓練異常高回報的 BUG
 
         計算已實現盈虧和增量未實現盈虧的總和。
 
         盈虧類型:
             1. 已實現盈虧 (Realized PnL):
-               - 當倉位從非零變為零時產生
+               - 當倉位從非零變為零時產生（平倉）
                - 計算公式: 倉位 × (平倉價 - 進場價)
-               - 這是真正的盈利/虧損
+               - Long Only: 只有做多盈利/虧損
 
             2. 增量未實現盈虧 (Incremental Unrealized PnL):
                - ✅ 修正：只計算當前步的價格變化
@@ -242,21 +232,21 @@ class RewardShaper:
 
         參數:
             prev_state: 前一狀態
-                position: 前一倉位
+                position: 前一倉位 [0, max_position]
                 entry_price: 進場價格
-                prev_price: 前一步的價格（新增）
+                prev_price: 前一步的價格
 
             new_state: 新狀態
-                position: 新倉位
+                position: 新倉位 [0, max_position]
                 current_price: 當前價格
 
         返回:
             pnl (float): 總盈虧
-                - 正值: 盈利
-                - 負值: 虧損
+                - 正值: 盈利（價格上漲）
+                - 負值: 虧損（價格下跌）
                 - 零: 無盈虧變化
 
-        計算範例:
+        計算範例 (Long Only):
             # 做多盈利（持倉3步，價格 100→101→102→103）
             # Step 1: 買入 @ 100
             prev: {position: 0, entry_price: 100, prev_price: 100}
@@ -272,7 +262,6 @@ class RewardShaper:
             prev: {position: 1, entry_price: 100, prev_price: 101}
             new: {position: 1, current_price: 102}
             pnl = 1 × (102 - 101) = +1.0  # ✅ 增量獎勵
-            # ❌ 舊版錯誤: pnl = 1 × (102 - 100) = +2.0
 
             # Step 4: 平倉 @ 103
             prev: {position: 1, entry_price: 100, prev_price: 102}
@@ -280,30 +269,30 @@ class RewardShaper:
             pnl = 1 × (103 - 100) = +3.0  # 已實現盈虧
 
             # 總累積獎勵 = 0 + 1 + 1 + 3 = 5.0  ✅ 正確
-            # ❌ 舊版錯誤: 0 + 1 + 2 + 3 = 6.0
         """
         # 獲取倉位資訊
         prev_position = prev_state.get('position', 0)
         new_position = new_state.get('position', 0)
         current_price = new_state.get('current_price', 0.0)
-        prev_price = prev_state.get('prev_price', current_price)  # ⭐ 新增
+        prev_price = prev_state.get('prev_price', current_price)
         entry_price = prev_state.get('entry_price', current_price)
+
+        # Long Only: 確保倉位非負
+        prev_position = max(0, prev_position)
+        new_position = max(0, new_position)
 
         # ===== 計算已實現盈虧 =====
         realized_pnl = 0.0
-        if prev_position != 0 and new_position == 0:
+        if prev_position > 0 and new_position == 0:
             # 從持倉變為平倉 → 計算已實現盈虧
-            # PnL = 倉位 × (平倉價 - 進場價)
-            #
-            # 做多盈利: +1 × (高價 - 低價) = 正值
-            # 做多虧損: +1 × (低價 - 高價) = 負值
-            # 做空盈利: -1 × (低價 - 高價) = 正值
-            # 做空虧損: -1 × (高價 - 低價) = 負值
+            # Long Only: PnL = 倉位 × (平倉價 - 進場價)
+            # 盈利: +1 × (高價 - 低價) = 正值
+            # 虧損: +1 × (低價 - 高價) = 負值
             realized_pnl = prev_position * (current_price - entry_price)
 
         # ===== 計算增量未實現盈虧（僅當前步的變化）=====
         incremental_pnl = 0.0
-        if prev_position != 0:
+        if prev_position > 0:
             # ✅ 修正：只獎勵本步的價格變化
             # 而非整個持倉的浮動盈虧（會導致二次方累積）
             price_change = current_price - prev_price

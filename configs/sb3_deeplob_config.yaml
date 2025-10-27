@@ -5,14 +5,15 @@
 #
 # 作者: SB3-DeepLOB 專案團隊
 # 日期: 2025-10-26
-# 版本: v2.0
+# 版本: v3.0 (Long Only 策略)
 
 # ===== 專案資訊 =====
 project:
   name: "SB3-DeepLOB"
-  version: "2.0"
-  description: "PPO + DeepLOB 雙層學習架構 - 台股高頻交易"
+  version: "3.0"
+  description: "PPO + DeepLOB 雙層學習架構 - 台股高頻交易 (Long Only 策略)"
   author: "SB3-DeepLOB Team"
+  strategy: "Long Only"  # 只做多，不做空 (PPO_6 起)
 
 # ===== 環境配置 =====
 env_config:
@@ -26,8 +27,8 @@ env_config:
   max_steps: 500
   initial_balance: 10000.0
 
-  # 交易參數
-  max_position: 1               # 最大持倉 {-1, 0, 1}
+  # 交易參數 (Long Only)
+  max_position: 1               # 最大持倉 [0, 1] | PPO_6: 改為只做多 (不允許負倉位)
 
   # ===== 台股交易成本配置 (2025 最新) =====
   # 重要：台股報價為"每股價格"，交易單位為"張"（1 張 = 1000 股）
@@ -61,12 +62,12 @@ env_config:
       enabled: false            # 是否啟用
       rate: 0.0001              # 滑點率 0.01%
 
-  # 獎勵塑形
+  # 獎勵塑形 (PPO_6 簡化版)
   reward_config:
-    pnl_scale: 1.0              # PnL 權重
+    pnl_scale: 1.0              # PnL 權重（核心獎勵）
     cost_penalty: 1.0           # 交易成本懲罰
-    inventory_penalty: 0.01     # 庫存懲罰
-    risk_penalty: 0.005         # 風險懲罰
+    inventory_penalty: 0.0      # ❌ 已移除 | PPO_6: 不懲罰長時間持倉
+    risk_penalty: 0.0           # ❌ 已移除 | PPO_6: 簡化獎勵函數
 
   # 數據模式
   data_mode: "train"            # train/val/test
