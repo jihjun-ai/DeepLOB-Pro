@@ -108,24 +108,13 @@ class RewardShaper:
         self.inventory_penalty_weight = config.get('inventory_penalty', 0.01)
         self.risk_penalty_weight = config.get('risk_penalty', 0.005)
 
-        # ===== 動態持倉激勵配置（PPO_22）=====
-        self.holding_bonus_initial = config.get('holding_bonus_initial', 0.02)
-        self.holding_bonus_final = config.get('holding_bonus_final', 0.005)
-        self.holding_bonus_decay_steps = config.get('holding_bonus_decay_steps', 100)
-
-        # ===== DeepLOB 方向性獎勵配置（PPO_23）=====
-        self.use_directional_reward = config.get('use_directional_reward', False)
-        self.directional_reward_scale = config.get('directional_reward_scale', 0.5)
-
         # 記錄配置資訊
         logger.info(
-            f"獎勵塑形器已初始化 (PPO_23): "
+            f"獎勵塑形器已初始化: "
             f"PnL權重={self.pnl_scale}, "
             f"成本懲罰={self.cost_penalty_weight}, "
-            f"持倉激勵={self.holding_bonus_initial}→{self.holding_bonus_final} "
-            f"(衰減{self.holding_bonus_decay_steps}步), "
-            f"方向性獎勵={'啟用' if self.use_directional_reward else '關閉'} "
-            f"(權重={self.directional_reward_scale})"
+            f"庫存懲罰={self.inventory_penalty_weight}, "
+            f"風險懲罰={self.risk_penalty_weight}"
         )
 
     def calculate_reward(
@@ -214,21 +203,10 @@ class RewardShaper:
         # risk_penalty = self._calculate_risk_penalty(new_state)
         reward_components['risk_penalty'] = 0.0  # 不再懲罰風險
 
-        # ===== 組件5: 持倉激勵（動態衰減）===== (PPO_22 啟用)
-        # 核心理念: 讓模型勇於交易,從交易中學習
-        # 前期（0-100步）: 高激勵 0.02，鼓勵探索交易
-        # 中後期（100-500步）: 低激勵 0.005，維持適度交易
-        holding_bonus = self._calculate_holding_bonus(new_state)
-        reward_components['holding_bonus'] = holding_bonus
-
-        # ===== 組件6: DeepLOB 方向性獎勵 ===== (PPO_23 啟用)
-        # 核心理念: 教模型"低點買、高點賣"
-        # 買入 + DeepLOB預測上漲 → 正獎勵 (選對時機)
-        # 買入 + DeepLOB預測下跌 → 負獎勵 (選錯時機)
-        directional_reward = self._calculate_directional_reward(
-            action, new_state, prev_state
-        )
-        reward_components['directional_reward'] = directional_reward
+        # ===== 組件5: 持倉激勵 ===== (已移除，PPO_12)
+        # 移除原因: PPO_11 證明持倉激勵導致「永遠持倉」問題
+        #           改用「當日收盤未平倉懲罰」策略（在環境中實施）
+        reward_components['holding_bonus'] = 0.0
 
         # ===== 計算總獎勵 =====
         # 將所有組件相加（注意懲罰項已經是負值）
@@ -327,175 +305,6 @@ class RewardShaper:
 
         # 總盈虧 = 已實現 + 增量未實現
         return realized_pnl + incremental_pnl
-
-    def _calculate_holding_bonus(self, new_state: Dict) -> float:
-        """計算持倉激勵（動態衰減）- PPO_22
-
-        核心理念: 讓模型勇於交易,從交易中學習
-
-        動態衰減策略:
-            - 前期（0-100步）: 高激勵 (0.02)，線性衰減至 (0.005)
-            - 中後期（100-500步）: 低激勵 (0.005)，維持不變
-
-        計算公式:
-            if step < decay_steps:
-                bonus = initial - (initial - final) * (step / decay_steps)
-            else:
-                bonus = final
-
-        參數:
-            new_state: 新狀態字典
-                position (float): 當前倉位 [0, 1]
-                step (int): 當前步數
-
-        返回:
-            holding_bonus (float): 持倉激勵（正值或零）
-                - position > 0: 返回動態激勵
-                - position = 0: 返回 0
-
-        範例:
-            # 第 0 步買入
-            state = {'position': 1, 'step': 0}
-            bonus = 0.02  # 初始激勵
-
-            # 第 50 步持倉
-            state = {'position': 1, 'step': 50}
-            bonus = 0.0125  # 衰減至一半
-
-            # 第 100 步持倉
-            state = {'position': 1, 'step': 100}
-            bonus = 0.005  # 衰減至最終值
-
-            # 第 300 步持倉
-            state = {'position': 1, 'step': 300}
-            bonus = 0.005  # 維持最終值
-
-            # 平倉狀態
-            state = {'position': 0, 'step': 50}
-            bonus = 0.0  # 無激勵
-        """
-        # 獲取倉位和步數
-        position = new_state.get('position', 0)
-        step = new_state.get('step', 0)
-
-        # 無倉位，無激勵
-        if position == 0:
-            return 0.0
-
-        # 計算當前激勵值（動態衰減）
-        if step < self.holding_bonus_decay_steps:
-            # 線性衰減階段
-            decay_ratio = step / self.holding_bonus_decay_steps
-            current_bonus = (
-                self.holding_bonus_initial
-                - (self.holding_bonus_initial - self.holding_bonus_final) * decay_ratio
-            )
-        else:
-            # 穩定階段
-            current_bonus = self.holding_bonus_final
-
-        # 倉位 × 激勵值
-        return position * current_bonus
-
-    def _calculate_directional_reward(
-        self, action: int, new_state: Dict, prev_state: Dict
-    ) -> float:
-        """計算 DeepLOB 方向性獎勵 - PPO_23
-
-        核心理念: 教模型"低點買、高點賣"
-
-        獎勵邏輯:
-            - Buy + DeepLOB預測上漲 → +獎勵 (選對時機！)
-            - Buy + DeepLOB預測下跌 → -懲罰 (選錯時機)
-            - Sell + 有持倉 + 價格上漲 → +獎勵 (高點賣出)
-            - Hold + 平倉狀態 → 0 (中性)
-
-        DeepLOB 預測:
-            - deeplob_pred[0]: 下跌機率
-            - deeplob_pred[1]: 持平機率
-            - deeplob_pred[2]: 上漲機率
-
-        計算公式:
-            if action == Buy:
-                # 上漲機率 - 下跌機率 (範圍 [-1, 1])
-                signal = pred[2] - pred[0]
-                reward = signal * scale
-            if action == Sell and prev_position > 0:
-                # 獲利賣出額外獎勵
-                if current_price > entry_price:
-                    reward = +scale * 0.5
-
-        參數:
-            action: 動作 (0=Hold, 1=Buy, 2=Sell)
-            new_state: 新狀態 (包含 deeplob_pred)
-            prev_state: 前一狀態 (包含 position, entry_price)
-
-        返回:
-            directional_reward: 方向性獎勵（可正可負）
-
-        範例:
-            # 買入時機正確
-            action = 1 (Buy)
-            deeplob_pred = [0.1, 0.2, 0.7]  # 70% 上漲
-            signal = 0.7 - 0.1 = 0.6
-            reward = 0.6 * 0.5 = +0.3  ✅ 鼓勵
-
-            # 買入時機錯誤
-            action = 1 (Buy)
-            deeplob_pred = [0.7, 0.2, 0.1]  # 70% 下跌
-            signal = 0.1 - 0.7 = -0.6
-            reward = -0.6 * 0.5 = -0.3  ❌ 懲罰
-
-            # 高點賣出
-            action = 2 (Sell), prev_position = 1
-            entry_price = 100, current_price = 105
-            reward = +0.5 * 0.5 = +0.25  ✅ 鼓勵
-        """
-        # 未啟用方向性獎勵
-        if not self.use_directional_reward:
-            return 0.0
-
-        # 獲取 DeepLOB 預測
-        deeplob_pred = new_state.get('deeplob_pred', None)
-        if deeplob_pred is None:
-            return 0.0
-
-        # 確保預測是列表/數組
-        if not isinstance(deeplob_pred, (list, np.ndarray)):
-            return 0.0
-
-        # 確保有 3 個值
-        if len(deeplob_pred) != 3:
-            return 0.0
-
-        reward = 0.0
-
-        # ===== 情況1: 買入動作 =====
-        if action == 1:  # Buy
-            # 計算方向信號 (上漲機率 - 下跌機率)
-            # 範圍: [-1, 1]
-            # 正值: 預測上漲 → 買入正確
-            # 負值: 預測下跌 → 買入錯誤
-            up_prob = deeplob_pred[2]
-            down_prob = deeplob_pred[0]
-            signal = up_prob - down_prob
-
-            # 獎勵 = 信號 × 權重
-            reward = signal * self.directional_reward_scale
-
-        # ===== 情況2: 賣出動作（有持倉）=====
-        elif action == 2:  # Sell
-            prev_position = prev_state.get('position', 0)
-            if prev_position > 0:
-                # 檢查是否獲利賣出
-                entry_price = prev_state.get('entry_price', 0)
-                current_price = new_state.get('current_price', 0)
-
-                if current_price > entry_price:
-                    # 高點賣出，額外小獎勵
-                    reward = self.directional_reward_scale * 0.5
-
-        return reward
 
     def _calculate_risk_penalty(self, new_state: Dict) -> float:
         """計算風險懲罰

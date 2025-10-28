@@ -281,6 +281,22 @@ python scripts/quick_validate_deeplob.py
   Val F1 (U):    0.4949
 
 
+訓練後驗證步驟
+分析 TensorBoard:
+python scripts/analyze_tensorboard.py --log-dir logs/sb3_deeplob/PPO_22
+驗證交易行為:
+python scripts/check_trading_behavior.py --model checkpoints/sb3/ppo_deeplob/best_model.zip --n_episodes 5
+完整評估:
+python scripts/evaluate_sb3.py --model checkpoints/sb3/ppo_deeplob/best_model.zip --n_episodes 20
+成功標準
+
+
+
+
+[ANALYZE] 分析數據...
+[OK] JSON 報告已保存: results/analysis.json
+[OK] Markdown 報告已保存: results/analysis.md
+
 參數檔:train_v5.yaml
 參考調參歷史記錄：docs\20251025-deeplob調參歷史.md 記錄內容,調參後需更新供下次參考用
 train_v5.yaml 被調整的參數備註需保留舊的值標註修改原因(每個實驗簡短一行為限(不刪除舊實驗資訊))

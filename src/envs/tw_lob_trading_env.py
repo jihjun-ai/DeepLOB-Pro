@@ -353,12 +353,22 @@ class TaiwanLOBTradingEnv(gym.Env):
         next_price = self.prices[self.current_data_idx]
         price_change = next_price - current_price
 
-        # 構建新狀態
+        # 獲取 DeepLOB 預測（PPO_23）
+        if self.deeplob_model is not None:
+            with torch.no_grad():
+                lob_seq = torch.FloatTensor(self.lob_history).unsqueeze(0)
+                deeplob_probs = self.deeplob_model.predict_proba(lob_seq)[0].cpu().numpy()
+        else:
+            deeplob_probs = np.array([0.33, 0.34, 0.33])  # 均勻分布
+
+        # 構建新狀態（PPO_23: 新增 deeplob_pred）
         new_state = {
             'position': self.position,
             'current_price': next_price,
             'inventory': self.inventory,
-            'volatility': 0.01
+            'volatility': 0.01,
+            'step': self.current_step,  # PPO_22: 用於動態獎勵衰減
+            'deeplob_pred': deeplob_probs  # PPO_23: 用於方向性獎勵
         }
 
         # 計算獎勵
@@ -373,16 +383,14 @@ class TaiwanLOBTradingEnv(gym.Env):
         terminated = False
         truncated = self.current_step >= self.max_steps
 
-        # ===== 當日收盤未平倉懲罰 ===== (策略2: 台股當沖規則)
-        # 如果 Episode 結束時仍有持倉，給予懲罰（模擬當沖必須平倉的規則）
-        if truncated and self.position > 0:
-            # 未平倉懲罰：基於持倉大小
-            unclosed_penalty = -3.0 * self.position  # 每單位持倉懲罰 3.0 元 | PPO_20: -3 (回到 PPO_16 成功配置，延長至3M+LR衰減) | PPO_19: -2.5 (Buy 0%❌，完全不交易) | PPO_18: -3 (Buy 3.4%, 平均-0.51接近盈虧平衡) | PPO_16: -3 (✅ Buy 7.3%, 40%勝率，+1.18最佳獎勵) | PPO_15: -5 (Buy 4.4%) | PPO_14: -2 (Buy 77.8%)
-            reward += unclosed_penalty
-
-            # 記錄到 reward_info
-            if 'unclosed_position_penalty' not in reward_info:
-                reward_info['unclosed_position_penalty'] = unclosed_penalty
+        # ===== 當日收盤未平倉懲罰 ===== (PPO_22: 已移除)
+        # PPO_22 策略: 移除未平倉懲罰，改用「持倉激勵動態衰減」
+        # 原因: PPO_13-21 證明固定懲罰導致「不交易」或「過度交易」問題
+        # 新方案: 前期高激勵 (0.02) 鼓勵探索，後期低激勵 (0.005) 維持交易
+        # if truncated and self.position > 0:
+        #     unclosed_penalty = -3.0 * self.position  # ❌ 已移除
+        #     reward += unclosed_penalty
+        #     reward_info['unclosed_position_penalty'] = unclosed_penalty
 
         # 生成觀測
         obs = self._get_observation()

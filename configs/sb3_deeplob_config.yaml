@@ -62,14 +62,24 @@ env_config:
       enabled: false            # 是否啟用
       rate: 0.0001              # 滑點率 0.01%
 
-  # 獎勵塑形 (PPO_20 版本: 回到 PPO_16 基礎 + 延長至 3M 步)
+  # 獎勵塑形 (PPO_23 版本: DeepLOB 方向性獎勵 - 教模型"低買高賣")
   reward_config:
     pnl_scale: 1.0              # PnL 權重（核心獎勵）
     cost_penalty: 1.0           # 交易成本懲罰
     inventory_penalty: 0.0      # ❌ 已移除 | PPO_6: 不懲罰長時間持倉
     risk_penalty: 0.0           # ❌ 已移除 | PPO_6: 簡化獎勵函數
-    # 注意: unclosed_position_penalty 在 tw_lob_trading_env.py 中實施 (Line 380)
-    #       PPO_20: -3元/倉位 (回到 PPO_16 成功配置，延長至3M+LR衰減) | PPO_19: -2.5元/倉位 (Buy 0%❌，完全不交易) | PPO_18: -3元/倉位 (Buy 3.4%, 20%勝率, 平均-0.51) | PPO_16: -3元/倉位 (✅ Buy 7.3%, 40%勝率，+1.18最佳獎勵) | PPO_15: -5元/倉位 (Buy 4.4%) | PPO_14: -2元/倉位 (Buy 77.8%)
+    # ===== PPO_22: 動態持倉激勵（讓模型勇於交易） =====
+    holding_bonus_initial: 0.02   # 初始持倉激勵（前期高獎勵，鼓勵探索）
+    holding_bonus_final: 0.005    # 最終持倉激勵（後期低獎勵，維持交易）
+    holding_bonus_decay_steps: 100  # 激勵衰減步數（100步內線性衰減）
+    # ===== PPO_23: DeepLOB 方向性獎勵（教模型"低買高賣"）⭐⭐⭐⭐⭐ =====
+    use_directional_reward: true    # 啟用方向性獎勵
+    directional_reward_scale: 0.5   # 方向性獎勵權重
+    # 核心理念: 利用 DeepLOB 預測直接教模型何時該買/賣
+    #          - Buy + 預測上漲 → +獎勵 (選對時機)
+    #          - Buy + 預測下跌 → -懲罰 (選錯時機)
+    #          - Sell + 獲利 → +獎勵 (高點賣出)
+    # 預期: 學習曲線陡峭，快速收斂至正確策略
 
   # 數據模式
   data_mode: "train"            # train/val/test
@@ -125,8 +135,8 @@ deeplob_extractor:
 
 # ===== 訓練配置 =====
 training:
-  # 訓練步數（PPO_20: 回到 PPO_16 成功配置，延長至 3M）
-  total_timesteps: 3000000      # 3M steps | PPO_20: 3M（回到-3元懲罰，延長訓練+LR衰減，預期 Buy 10-15%） | PPO_19: 1.5M (Buy 0%❌，完全不交易) | PPO_18: 1M (平均-0.51接近盈虧平衡) | PPO_16: 200K (✅ Buy 7.3%, 40%勝率，+1.18最佳獎勵) | PPO_15: 200K (Buy 4.4%) | PPO_14: 200K (Buy 77.8%)
+  # 訓練步數（PPO_23: 方向性獎勵 + 動態激勵，500K 快速驗證）
+  total_timesteps: 500000       # 500K steps | PPO_23: 500K（方向性獎勵教"低買高賣"，預期快速收斂） | PPO_22: 1M（動態激勵，待測試） | PPO_21: 3M（Buy 3.4%❌失敗）
 
   # 續訓配置
   resume:
@@ -241,8 +251,8 @@ advanced:
   # 梯度累積
   gradient_accumulation_steps: 1
 
-  # 學習率調度（PPO_20: 啟用線性衰減）
-  lr_schedule: "linear"         # linear: 1e-4 → 3e-5 (PPO_20 啟用) | constant: 固定 1e-4 (PPO_19) | exponential: 指數衰減
+  # 學習率調度（PPO_22: 固定學習率）
+  lr_schedule: "constant"       # constant: 固定 1e-4 (PPO_22，KL=0.008穩定無需衰減) | linear: 1e-4 → 3e-5 (PPO_20/21無效)
 
   # 提前停止
   early_stopping:
